@@ -196,8 +196,8 @@ vim.keymap.set('n', '<leader>lf', function()
 end, { desc = 'format' })
 
 -- 系统剪贴板
-vim.keymap.set({ 'n', 'v' }, '<leader>c', '"+y', { desc = 'copy to system clipboard' })
-vim.keymap.set({ 'n', 'v' }, '<leader>x', '"+d', { desc = 'cut to system clipboard' })
+vim.keymap.set({ 'n', 'v' }, '<leader>y', '"+y', { desc = 'copy to system clipboard' })
+vim.keymap.set({ 'n', 'v' }, '<leader>d', '"+d', { desc = 'cut to system clipboard' })
 vim.keymap.set({ 'n', 'v' }, '<leader>p', '"+p', { desc = 'paste to system clipboard' })
 -- 撤销
 vim.keymap.set({ 'n', 'v', 'i' }, '<C-z>', '<ESC>u<CR>', { desc = 'undo' })
