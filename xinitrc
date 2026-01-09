@@ -10,6 +10,10 @@ export XDG_SESSION_TYPE=x11
 export XDG_SESSION_DESKTOP=dwm
 export DESKTOP_SESSION=dwm
 export XDG_CONFIG_DIRS=/etc/xdg
+
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
 exec dbus-launch --exit-with-session ~/.config/dwm/loopdwm
 
 #exec dwm
