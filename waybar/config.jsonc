@@ -14,7 +14,6 @@
     "modules-center": [
     ],
     "modules-right": [
-        "tray",
         "network",
         "cpu",
         "memory",
@@ -23,7 +22,8 @@
         "backlight",
         // "battery",
         "clock",
-        "custom/power"
+        "custom/power",
+        "tray"
     ],
     "dwl/window": {
         "format": "[{layout}]{title}",
