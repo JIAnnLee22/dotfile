@@ -1,0 +1,38 @@
+# 敏感信息 - API密钥和认证令牌
+auth.json
+agent/auth.json
+
+# 会话记录 - 自动生成
+sessions/
+
+# npm依赖和缓存 - 自动生成
+npm/
+npm/node_modules/
+npm/package-lock.json
+
+# 二进制文件缓存 - 自动生成
+bin/
+
+# agent目录中的会话记录
+agent/sessions/
+
+# git目录中的内容（已有自己的.gitignore）
+git/
+
+# 日志文件和临时文件
+*.log
+*.tmp
+*.cache
+*.pid
+*.lock
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# 编辑器配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

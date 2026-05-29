@@ -1,3 +1,26 @@
 nvim/site/pack/packer/start
 nvim/mason/
 nvim/plugin/
+
+# pi配置目录 - 忽略敏感信息和自动生成的文件
+pi/auth.json
+pi/agent/auth.json
+pi/sessions/
+pi/npm/
+pi/npm/node_modules/
+pi/npm/package-lock.json
+pi/bin/
+pi/agent/sessions/
+pi/git/
+pi/*.log
+pi/*.tmp
+pi/*.cache
+pi/*.pid
+pi/*.lock
+pi/.DS_Store
+pi/Thumbs.db
+pi/.vscode/
+pi/.idea/
+pi/*.swp
+pi/*.swo
+pi/*~
