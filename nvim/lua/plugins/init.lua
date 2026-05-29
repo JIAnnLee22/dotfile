@@ -8,9 +8,9 @@ M.plugins_list = {
   },
   lsp = {
     { src = "https://github.com/mason-org/mason-lspconfig.nvim" }, -- lsp配置
-    { src = "https://github.com/mason-org/mason.nvim" }, -- lsp配置
-    { src = "https://github.com/neovim/nvim-lspconfig" }, -- lsp配置
-    { src = "https://github.com/stevearc/conform.nvim" }, -- 格式化配置
+    { src = "https://github.com/mason-org/mason.nvim" },           -- lsp配置
+    { src = "https://github.com/neovim/nvim-lspconfig" },          -- lsp配置
+    { src = "https://github.com/stevearc/conform.nvim" },          -- 格式化配置
   },
   ui = {
     { src = "https://github.com/mofiqul/dracula.nvim" },        -- 德古拉颜色主题
@@ -41,7 +41,7 @@ vim.cmd([[colorscheme dracula]])
 require("mason").setup()
 
 require("mason-lspconfig").setup {
-    automatic_enable = false
+  automatic_enable = true
 }
 
 -- 插件配置文件导入

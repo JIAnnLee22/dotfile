@@ -27,3 +27,7 @@ export ELECTRON_OZONE_PLATFORM_HINT=auto
 
 export OBSFILE_ROOT=$HOME/obs/obsfile/
 PATH=$PATH:$HOME/obs/obsgen/linux/
+PATH=$HOME/.npm-global/bin:$PATH
+
+# Pi coding agent config directory
+export PI_CODING_AGENT_DIR=$HOME/.config/pi
