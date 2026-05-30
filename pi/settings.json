@@ -7,8 +7,8 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.76.0",
-  "defaultProvider": "xiaomi",
-  "defaultModel": "mimo-v2.5",
+  "lastChangelogVersion": "0.78.0",
+  "defaultProvider": "cursor",
+  "defaultModel": "composer-2.5-fast",
   "defaultThinkingLevel": "high"
 }
