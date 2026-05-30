@@ -1,5 +1,5 @@
 /* ============================================
-   Waybar Flat Style — Frosted Glass
+   Waybar Flat Style — Light Frosted Glass
    ============================================ */
 
 * {
@@ -9,13 +9,15 @@
     border: none;
     border-radius: 6px;
     min-height: 0;
-    text-shadow: none;
 }
 
 window#waybar {
-    background: rgba(245, 240, 232, 0.35);
-    margin: 0;
-    border-radius: 0;
+    background: rgba(245, 240, 232, 0.3);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: none;
+    margin: 8px;
+    border-radius: 8px;
 }
 
 window#waybar > * {
@@ -45,11 +47,11 @@ button:hover {
 }
 
 #workspaces button {
-    transition: all 0.2s ease;
-    padding: 0 6px;
+    transition: none;
+    padding: 0 4px;
     min-height: 0px;
     min-width: 28px;
-    margin-left: 0;
+    margin-left: 2px;
     background: transparent;
     color: rgba(60, 56, 54, 0.3);
     border-radius: 0;
@@ -93,11 +95,6 @@ button:hover {
     border-radius: 0;
     border-top: 2px solid transparent;
     padding-top: 4px;
-    transition: all 0.2s ease;
-}
-
-#taskbar button:hover {
-    background: transparent;
 }
 
 #taskbar button.active {
@@ -158,11 +155,10 @@ window#waybar.empty #window {
 #keyboard-state,
 #language,
 #mpd {
-    padding: 0 10px;
+    padding: 0px 8px;
     border-radius: 0;
     background: transparent;
-    color: rgba(60, 56, 54, 0.75);
-    margin: 0;
+    color: rgba(60, 56, 54, 0.65);
 }
 
 /* --- Accent states --- */
@@ -182,8 +178,6 @@ window#waybar.empty #window {
 #clock {
     color: #3c3836;
     padding-right: 12px;
-    background: transparent;
-    font-weight: 600;
 }
 
 /* Network */
@@ -242,8 +236,6 @@ window#waybar.empty #window {
 /* Tray */
 #tray {
     background: transparent;
-    border-radius: 0;
-    padding: 0 4px;
 }
 
 #tray > .passive {
@@ -264,8 +256,11 @@ window#waybar.empty #window {
    Tooltip & Menu
    ============================================ */
 tooltip {
-    background-color: rgba(245, 240, 232, 0.85);
-    border-radius: 6px;
+    background-color: rgba(245, 240, 232, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: none;
+    border-radius: 8px;
 }
 
 tooltip decoration {
@@ -278,21 +273,22 @@ tooltip decoration:backdrop {
 
 tooltip label {
     color: #3c3836;
-    padding: 4px 8px;
-    font-size: 14px;
+    padding: 3px 7px;
 }
 
 menu {
-    background: rgba(245, 240, 232, 0.85);
-    border-radius: 6px;
-    padding: 4px;
+    border-width: 1px;
+    border-style: solid;
+    border-color: rgba(60, 56, 54, 0.3);
+    background: rgba(245, 240, 232, 0.75);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 8px;
 }
 
 menuitem {
     border-radius: 6px;
     color: #3c3836;
-    padding: 4px 8px;
-    transition: all 0.2s ease;
 }
 
 menuitem:hover {
