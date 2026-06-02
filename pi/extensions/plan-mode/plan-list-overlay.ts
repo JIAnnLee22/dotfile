@@ -24,6 +24,21 @@ export interface PlanListComponent extends Component {
   invalidate(): void;
 }
 
+function safeMatchesKey(data: string, key: unknown): boolean {
+  if (key === undefined || key === null) {
+    return false;
+  }
+  try {
+    return matchesKey(data, key as any);
+  } catch {
+    return false;
+  }
+}
+
+function matchesLiteralKey(data: string, key: string): boolean {
+  return data === key;
+}
+
 function createPlanListComponent(
   theme: ThemeLike,
   onClose: () => void,
@@ -37,6 +52,9 @@ function createPlanListComponent(
   const component: PlanListComponent = {
     setItems(newItems: TodoItem[]) {
       items = newItems;
+      const maxVisible = Math.max(1, Math.min(items.length, 10));
+      const maxScroll = Math.max(0, items.length - maxVisible);
+      scrollOffset = Math.min(scrollOffset, maxScroll);
       cachedWidth = undefined;
       cachedLines = undefined;
     },
@@ -50,39 +68,50 @@ function createPlanListComponent(
     },
 
     handleInput(data: string): void {
-      if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("p"))) {
+      if (safeMatchesKey(data, Key.escape) || safeMatchesKey(data, Key.ctrl("p"))) {
         onClose();
         return;
       }
 
-      if (matchesKey(data, Key.up) || matchesKey(data, Key.k)) {
+      if (
+        safeMatchesKey(data, Key.up) ||
+        safeMatchesKey(data, (Key as any).k) ||
+        matchesLiteralKey(data, "k")
+      ) {
         if (scrollOffset > 0) {
           scrollOffset--;
           cachedWidth = undefined;
           cachedLines = undefined;
         }
-      } else if (matchesKey(data, Key.down) || matchesKey(data, Key.j)) {
-        const maxScroll = Math.max(0, items.length - 1);
+      } else if (
+        safeMatchesKey(data, Key.down) ||
+        safeMatchesKey(data, (Key as any).j) ||
+        matchesLiteralKey(data, "j")
+      ) {
+        const maxVisible = Math.max(1, Math.min(items.length, 10));
+        const maxScroll = Math.max(0, items.length - maxVisible);
         if (scrollOffset < maxScroll) {
           scrollOffset++;
           cachedWidth = undefined;
           cachedLines = undefined;
         }
-      } else if (matchesKey(data, Key.pageUp)) {
+      } else if (safeMatchesKey(data, Key.pageUp)) {
         scrollOffset = Math.max(0, scrollOffset - 5);
         cachedWidth = undefined;
         cachedLines = undefined;
-      } else if (matchesKey(data, Key.pageDown)) {
-        const maxScroll = Math.max(0, items.length - 1);
+      } else if (safeMatchesKey(data, Key.pageDown)) {
+        const maxVisible = Math.max(1, Math.min(items.length, 10));
+        const maxScroll = Math.max(0, items.length - maxVisible);
         scrollOffset = Math.min(maxScroll, scrollOffset + 5);
         cachedWidth = undefined;
         cachedLines = undefined;
-      } else if (matchesKey(data, Key.home)) {
+      } else if (safeMatchesKey(data, Key.home)) {
         scrollOffset = 0;
         cachedWidth = undefined;
         cachedLines = undefined;
-      } else if (matchesKey(data, Key.end)) {
-        scrollOffset = Math.max(0, items.length - 1);
+      } else if (safeMatchesKey(data, Key.end)) {
+        const maxVisible = Math.max(1, Math.min(items.length, 10));
+        scrollOffset = Math.max(0, items.length - maxVisible);
         cachedWidth = undefined;
         cachedLines = undefined;
       }
@@ -106,7 +135,9 @@ function createPlanListComponent(
 
       // 计算可见区域
       const maxVisible = Math.max(1, Math.min(items.length, 10));
-      const startIdx = Math.min(scrollOffset, Math.max(0, items.length - maxVisible));
+      const maxScroll = Math.max(0, items.length - maxVisible);
+      scrollOffset = Math.min(scrollOffset, maxScroll);
+      const startIdx = scrollOffset;
       const endIdx = Math.min(startIdx + maxVisible, items.length);
 
       // 显示滚动指示器

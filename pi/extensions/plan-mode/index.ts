@@ -16,7 +16,7 @@
  * - /plan - 切换计划模式
  * - /todos - 显示当前进度
  * - Ctrl+Alt+L - 切换计划模式
- * - Ctrl+P - 显示/隐藏计划悬浮窗口
+ * - Ctrl+Alt+P - 显示/隐藏计划悬浮窗口
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -83,9 +83,13 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       planOverlayVisible = false;
     } else if (todoItems.length > 0) {
       // 显示
+      planOverlayVisible = true;
       await ctx.ui.custom(
         (_tui, theme, _keybindings, done) => {
           const component = createPlanListOverlay(theme as any, () => {
+            planOverlayHandle = null;
+            planOverlayComponent = null;
+            planOverlayVisible = false;
             done(undefined);
           });
           component.setItems(todoItems);
@@ -105,7 +109,6 @@ export default function planModeExtension(pi: ExtensionAPI): void {
           },
         }
       );
-      planOverlayVisible = true;
     } else {
       ctx.ui.notify("暂无计划可显示。请先创建计划。", "info");
     }
@@ -146,7 +149,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
     if (planModeEnabled) {
       pi.setActiveTools(PLAN_MODE_TOOLS);
-      ctx.ui.notify("[PLAN] 计划模式已启用\n\n可用工具: read, bash (只读), grep, find, ls\n\n请分析代码并创建计划。\n按 Ctrl+Alt+L 切换计划模式，按 Ctrl+P 显示/隐藏计划窗口。", "info");
+      ctx.ui.notify("[PLAN] 计划模式已启用\n\n可用工具: read, bash (只读), grep, find, ls\n\n请分析代码并创建计划。\n按 Ctrl+Alt+L 切换计划模式，按 Ctrl+Alt+P 显示/隐藏计划窗口。", "info");
     } else {
       pi.setActiveTools(NORMAL_MODE_TOOLS);
       // 关闭悬浮窗口
@@ -204,7 +207,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   });
 
   // 注册快捷键 - 显示/隐藏计划悬浮窗口
-  pi.registerShortcut(Key.ctrl("p"), {
+  pi.registerShortcut(Key.ctrlAlt("p"), {
     description: "显示/隐藏计划悬浮窗口",
     handler: async (ctx) => togglePlanOverlay(ctx),
   });
@@ -380,7 +383,7 @@ ${todoList}
       pi.sendMessage(
         {
           customType: "plan-todo-list",
-          content: `**计划已创建** (${total} 步)\n\n${planDisplay}\n\n按 Ctrl+P 显示/隐藏计划悬浮窗口`,
+          content: `**计划已创建** (${total} 步)\n\n${planDisplay}\n\n按 Ctrl+Alt+P 显示/隐藏计划悬浮窗口`,
           display: true,
         },
         { triggerTurn: false },
@@ -392,15 +395,15 @@ ${todoList}
       }
     }
 
-    // 选择下一步操作
-    const choices = todoItems.length > 0
+    // 选择下一步操作（无计划时不展示执行选项）
+    const hasPlanItems = todoItems.length > 0;
+    const choices = hasPlanItems
       ? [
           "执行计划（跟踪进度）",
           "继续完善计划",
           "取消计划",
         ]
       : [
-          "执行计划",
           "继续完善计划",
           "取消计划",
         ];
@@ -408,9 +411,9 @@ ${todoList}
     const choice = await ctx.ui.select("计划模式 - 下一步操作？", choices);
 
     if (choice?.startsWith("执行")) {
-      if (todoItems.length === 0) {
+      if (!hasPlanItems) {
         ctx.ui.notify(
-          "未检测到计划步骤。请确保回复包含 Plan:\n1. [文件路径] 修改描述 格式，或选择「继续完善计划」。",
+          "未检测到计划步骤。请先选择「继续完善计划」并使用 Plan:\n1. [文件路径] 修改描述 格式。",
           "warning",
         );
         return;

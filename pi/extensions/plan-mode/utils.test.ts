@@ -20,17 +20,34 @@ describe("splitCommandSegments", () => {
     assert.deepEqual(splitCommandSegments("ls -la | head -5"), ["ls -la", "head -5"]);
     assert.deepEqual(splitCommandSegments("ls && pwd"), ["ls", "pwd"]);
   });
+
+  it("does not split inside quoted, escaped, or command substitution contexts", () => {
+    assert.deepEqual(splitCommandSegments("echo 'a|b;d' | wc -c"), ["echo 'a|b;d'", "wc -c"]);
+    assert.deepEqual(splitCommandSegments("echo foo\\|bar | wc -c"), ["echo foo\\|bar", "wc -c"]);
+    assert.deepEqual(splitCommandSegments("echo $(printf 'a|b') | wc -c"), ["echo $(printf 'a|b')", "wc -c"]);
+    assert.deepEqual(splitCommandSegments("echo `printf 'x;y'` && pwd"), ["echo `printf 'x;y'`", "pwd"]);
+  });
 });
 
 describe("hasUnsafeRedirect", () => {
   it("allows stderr suppression", () => {
     assert.equal(hasUnsafeRedirect("ls 2>/dev/null"), false);
+    assert.equal(hasUnsafeRedirect("ls 2>>/dev/null"), false);
     assert.equal(hasUnsafeRedirect("ls 2>&1"), false);
+    assert.equal(hasUnsafeRedirect("ls &>/dev/null"), false);
   });
 
   it("blocks file write redirects", () => {
     assert.equal(hasUnsafeRedirect("echo hi > out.txt"), true);
     assert.equal(hasUnsafeRedirect("echo hi >> out.txt"), true);
+    assert.equal(hasUnsafeRedirect("echo hi 1> out.txt"), true);
+    assert.equal(hasUnsafeRedirect("echo hi 1>> out.txt"), true);
+    assert.equal(hasUnsafeRedirect("echo hi >| out.txt"), true);
+  });
+
+  it("blocks read-write redirection", () => {
+    assert.equal(hasUnsafeRedirect("cat <> out.txt"), true);
+    assert.equal(hasUnsafeRedirect("cat 0<> out.txt"), true);
   });
 });
 
@@ -60,6 +77,22 @@ describe("extractTodoItems", () => {
     assert.equal(items[0].step, 1);
     assert.equal(items[1].step, 5);
   });
+
+  it("supports inline header format", () => {
+    const msg = "Plan: 1. Analyze repo\n2. Update docs";
+    const items = extractTodoItems(msg);
+    assert.equal(items.length, 2);
+    assert.equal(items[0].step, 1);
+    assert.equal(items[1].step, 2);
+  });
+
+  it("stops parsing when non-step content appears after plan steps", () => {
+    const msg = `Plan:\n1. Analyze repo\n2. Update docs\n\nNotes:\n1. This should not be parsed\n2. Neither should this`;
+    const items = extractTodoItems(msg);
+    assert.equal(items.length, 2);
+    assert.equal(items[0].step, 1);
+    assert.equal(items[1].step, 2);
+  });
 });
 
 describe("markCompletedSteps / markSkippedSteps", () => {
@@ -75,6 +108,22 @@ describe("markCompletedSteps / markSkippedSteps", () => {
     markSkippedSteps("[SKIP:1]", items);
     assert.equal(items[0].skipped, true);
     assert.equal(items[0].completed, true);
+  });
+
+  it("counts only newly changed items", () => {
+    const items = [
+      { step: 1, text: "A", completed: false },
+      { step: 2, text: "B", completed: false },
+    ];
+    const changed1 = markCompletedSteps("[DONE:1] [DONE:1]", items);
+    const changed2 = markCompletedSteps("[DONE:1]", items);
+    const changed3 = markSkippedSteps("[SKIP:2] [SKIP:2]", items);
+    const changed4 = markSkippedSteps("[SKIP:2]", items);
+
+    assert.equal(changed1, 1);
+    assert.equal(changed2, 0);
+    assert.equal(changed3, 1);
+    assert.equal(changed4, 0);
   });
 });
 

@@ -105,13 +105,60 @@ export function splitCommandSegments(command: string): string[] {
   let current = "";
   let inSingle = false;
   let inDouble = false;
+  let inBacktick = false;
+  let escaped = false;
+  let commandSubDepth = 0;
 
   for (let i = 0; i < command.length; i++) {
     const c = command[i];
-    if (c === "'" && !inDouble) inSingle = !inSingle;
-    else if (c === '"' && !inSingle) inDouble = !inDouble;
+    const next = command[i + 1] ?? "";
 
-    if (!inSingle && !inDouble) {
+    if (escaped) {
+      current += c;
+      escaped = false;
+      continue;
+    }
+
+    if (c === "\\") {
+      current += c;
+      // In shell, backslash inside single quotes is literal.
+      if (!inSingle) {
+        escaped = true;
+      }
+      continue;
+    }
+
+    if (!inDouble && !inBacktick && c === "'" && commandSubDepth === 0) {
+      inSingle = !inSingle;
+      current += c;
+      continue;
+    }
+
+    if (!inSingle && !inBacktick && c === '"') {
+      inDouble = !inDouble;
+      current += c;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && c === "`") {
+      inBacktick = !inBacktick;
+      current += c;
+      continue;
+    }
+
+    if (!inSingle && !inBacktick && c === "$" && next === "(") {
+      commandSubDepth++;
+      current += c;
+      continue;
+    }
+
+    if (!inSingle && !inBacktick && c === ")" && commandSubDepth > 0) {
+      commandSubDepth--;
+      current += c;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && !inBacktick && commandSubDepth === 0) {
       if (command.slice(i, i + 2) === "&&") {
         segments.push(current.trim());
         current = "";
@@ -130,6 +177,7 @@ export function splitCommandSegments(command: string): string[] {
         continue;
       }
     }
+
     current += c;
   }
 
@@ -142,14 +190,19 @@ export function splitCommandSegments(command: string): string[] {
  * 检测会写入文件的输出重定向（允许 2>/dev/null、2>&1、&>/dev/null）
  */
 export function hasUnsafeRedirect(segment: string): boolean {
-  const withoutStderr = segment
-    .replace(/2>\s*\/dev\/null/g, "")
-    .replace(/2>\s*&1/g, "")
-    .replace(/&>\s*\/dev\/null/g, "")
-    .replace(/&>\s*&1/g, "");
+  const withoutAllowedStderrRedirects = segment
+    // Keep stderr suppression/merging available in plan mode.
+    .replace(/(^|[^\d])2>>?\s*\/dev\/null\b/g, "$1")
+    .replace(/(^|[^\d])2>\s*&1\b/g, "$1")
+    .replace(/(^|[^\d])&>>?\s*\/dev\/null\b/g, "$1")
+    .replace(/(^|[^\d])&>\s*&1\b/g, "$1");
 
-  if (/>>\s*\S/.test(withoutStderr)) return true;
-  return /(?:^|[^\d&])\s*>\s*(?![|&])\S/.test(withoutStderr);
+  // Block stdout/combined redirects (e.g. >, >>, 1>, 1>>, >|, 1>|).
+  if (/(?:^|[^\d])(?:\d+)?>>\s*\S/.test(withoutAllowedStderrRedirects)) return true;
+  if (/(?:^|[^\d])(?:\d+)?>\|?\s*\S/.test(withoutAllowedStderrRedirects)) return true;
+
+  // Block read/write file opening (e.g. <>, 0<>).
+  return /(?:^|[^\d])(?:\d+)?<>\s*\S/.test(withoutAllowedStderrRedirects);
 }
 
 function segmentIsSafe(segment: string): boolean {
@@ -207,34 +260,54 @@ export function cleanStepText(text: string): string {
  */
 export function extractTodoItems(message: string): TodoItem[] {
   const items: TodoItem[] = [];
-  const headerMatch = message.match(/\*{0,2}(?:Plan|计划|TODO|步骤):\*{0,2}\s*\n/i);
-  if (!headerMatch) return items;
+  const headerMatch = message.match(/\*{0,2}(?:Plan|计划|TODO|步骤):\*{0,2}/i);
+  if (!headerMatch || headerMatch.index === undefined) return items;
 
-  const planSection = message.slice(message.indexOf(headerMatch[0]) + headerMatch[0].length);
-  const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
+  // 仅解析 Plan 标题后的连续步骤块，避免误抓后续普通编号列表。
+  const planSection = message.slice(headerMatch.index + headerMatch[0].length);
+  const lines = planSection.split(/\r?\n/);
   const usedSteps = new Set<number>();
+  const stepLinePattern = /^\s*(\d+)[.)]\s+(.+)$/;
+  const blankLinePattern = /^\s*$/;
+  let started = false;
 
-  for (const match of planSection.matchAll(numberedPattern)) {
-    const step = Number(match[1]);
-    const text = match[2]
-      .trim()
-      .replace(/\*{1,2}$/, "")
-      .trim();
-    if (
-      Number.isFinite(step) &&
-      step > 0 &&
-      !usedSteps.has(step) &&
-      text.length > 5 &&
-      !text.startsWith("`") &&
-      !text.startsWith("/") &&
-      !text.startsWith("-")
-    ) {
-      const cleaned = cleanStepText(text);
-      if (cleaned.length > 3) {
-        usedSteps.add(step);
-        items.push({ step, text: cleaned, completed: false });
+  for (const line of lines) {
+    const stepMatch = line.match(stepLinePattern);
+    if (stepMatch) {
+      started = true;
+      const step = Number(stepMatch[1]);
+      const text = stepMatch[2]
+        .trim()
+        .replace(/\*{1,2}$/, "")
+        .trim();
+
+      if (
+        Number.isFinite(step) &&
+        step > 0 &&
+        !usedSteps.has(step) &&
+        text.length > 5 &&
+        !text.startsWith("`") &&
+        !text.startsWith("/") &&
+        !text.startsWith("-")
+      ) {
+        const cleaned = cleanStepText(text);
+        if (cleaned.length > 3) {
+          usedSteps.add(step);
+          items.push({ step, text: cleaned, completed: false });
+        }
       }
+      continue;
     }
+
+    if (!started) {
+      // 支持 "Plan:" 之后先出现空行或说明。
+      if (blankLinePattern.test(line)) continue;
+      continue;
+    }
+
+    // 步骤块开始后，允许空行（常见于 markdown 列表排版）；遇到其它内容即停止解析。
+    if (blankLinePattern.test(line)) continue;
+    break;
   }
 
   return items.sort((a, b) => a.step - b.step);
@@ -251,24 +324,24 @@ export function getNextPendingItem(items: TodoItem[]): TodoItem | undefined {
  * 提取已完成的步骤编号
  */
 export function extractDoneSteps(message: string): number[] {
-  const steps: number[] = [];
+  const steps = new Set<number>();
   for (const match of message.matchAll(/\[DONE:(\d+)\]/gi)) {
     const step = Number(match[1]);
-    if (Number.isFinite(step)) steps.push(step);
+    if (Number.isFinite(step)) steps.add(step);
   }
-  return steps;
+  return [...steps].sort((a, b) => a - b);
 }
 
 /**
  * 提取跳过的步骤编号
  */
 export function extractSkipSteps(message: string): number[] {
-  const steps: number[] = [];
+  const steps = new Set<number>();
   for (const match of message.matchAll(/\[SKIP:(\d+)\]/gi)) {
     const step = Number(match[1]);
-    if (Number.isFinite(step)) steps.push(step);
+    if (Number.isFinite(step)) steps.add(step);
   }
-  return steps;
+  return [...steps].sort((a, b) => a - b);
 }
 
 /**
@@ -276,11 +349,15 @@ export function extractSkipSteps(message: string): number[] {
  */
 export function markCompletedSteps(text: string, items: TodoItem[]): number {
   const doneSteps = extractDoneSteps(text);
+  let changed = 0;
   for (const step of doneSteps) {
     const item = items.find((t) => t.step === step);
-    if (item) item.completed = true;
+    if (item && !item.completed) {
+      item.completed = true;
+      changed++;
+    }
   }
-  return doneSteps.length;
+  return changed;
 }
 
 /**
@@ -288,14 +365,16 @@ export function markCompletedSteps(text: string, items: TodoItem[]): number {
  */
 export function markSkippedSteps(text: string, items: TodoItem[]): number {
   const skipSteps = extractSkipSteps(text);
+  let changed = 0;
   for (const step of skipSteps) {
     const item = items.find((t) => t.step === step);
-    if (item) {
+    if (item && (!item.skipped || !item.completed)) {
       item.skipped = true;
       item.completed = true;
+      changed++;
     }
   }
-  return skipSteps.length;
+  return changed;
 }
 
 /**
