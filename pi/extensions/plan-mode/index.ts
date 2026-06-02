@@ -25,14 +25,18 @@ import {
   extractTodoItems,
   isSafeCommand,
   markCompletedSteps,
+  markSkippedSteps,
+  getNextPendingItem,
   generateProgressBar,
   formatPlanList,
   type TodoItem,
 } from "./utils.ts";
 
-// 工具列表配置
-const PLAN_MODE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire"];
-const NORMAL_MODE_TOOLS = ["read", "bash", "edit", "write"];
+// 工具列表配置（计划模式 = 只读；执行/正常模式 = 只读 + 编辑）
+const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls"] as const;
+const PLAN_MODE_TOOLS = [...READONLY_TOOLS];
+const EXECUTION_MODE_TOOLS = [...READONLY_TOOLS, "edit", "write"];
+const NORMAL_MODE_TOOLS = EXECUTION_MODE_TOOLS;
 
 // 类型守卫
 function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
@@ -94,17 +98,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       lines.push("");
 
       // 步骤列表
-      for (const item of todoItems) {
-        if (item.completed) {
-          lines.push(
-            ctx.ui.theme.fg("success", `  ✅ ${item.text}`),
-          );
-        } else if (item.skipped) {
-          lines.push(
-            ctx.ui.theme.fg("muted", `  ⏭️  ${item.text}`),
-          );
+      for (const item of [...todoItems].sort((a, b) => a.step - b.step)) {
+        const label = `${item.step}. ${item.text}`;
+        if (item.completed && item.skipped) {
+          lines.push(ctx.ui.theme.fg("muted", `  ⏭️  ${label}`));
+        } else if (item.completed) {
+          lines.push(ctx.ui.theme.fg("success", `  ✅ ${label}`));
         } else {
-          lines.push(`  ⬜ ${item.text}`);
+          lines.push(`  ⬜ ${label}`);
         }
       }
 
@@ -124,7 +125,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
     if (planModeEnabled) {
       pi.setActiveTools(PLAN_MODE_TOOLS);
-      ctx.ui.notify("📝 计划模式已启用\n\n可用工具: read, bash (只读命令), grep, find, ls\n\n请分析代码并创建计划。", "info");
+      ctx.ui.notify("📝 计划模式已启用\n\n可用工具: read, bash (只读), grep, find, ls\n\n请分析代码并创建计划。", "info");
     } else {
       pi.setActiveTools(NORMAL_MODE_TOOLS);
       ctx.ui.notify("🔓 计划模式已禁用，完整访问权限已恢复。", "info");
@@ -222,7 +223,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 你当前处于计划模式 - 一个用于安全代码分析的只读探索模式。
 
 🔒 限制：
-- 只能使用: read, bash (只读命令), grep, find, ls, questionnaire
+- 只能使用: read, bash (只读命令), grep, find, ls
 - 不能使用: edit, write（文件修改已禁用）
 - Bash 命令仅限于安全的只读命令
 
@@ -278,18 +279,9 @@ ${todoList}
 
     // 检查完成的步骤
     const completedCount = markCompletedSteps(text, todoItems);
+    const skippedCount = markSkippedSteps(text, todoItems);
 
-    // 检查跳过的步骤
-    for (const match of text.matchAll(/\[SKIP:(\d+)\]/gi)) {
-      const step = Number(match[1]);
-      const item = todoItems.find((t) => t.step === step);
-      if (item) {
-        item.skipped = true;
-        item.completed = true; // 跳过也视为完成
-      }
-    }
-
-    if (completedCount > 0) {
+    if (completedCount > 0 || skippedCount > 0) {
       updateStatus(ctx);
     }
     persistState();
@@ -363,15 +355,24 @@ ${todoList}
     const choice = await ctx.ui.select("计划模式 - 下一步操作？", choices);
 
     if (choice?.startsWith("🚀")) {
-      planModeEnabled = false;
-      executionMode = todoItems.length > 0;
-      pi.setActiveTools(NORMAL_MODE_TOOLS);
-      updateStatus(ctx);
+      if (todoItems.length === 0) {
+        ctx.ui.notify(
+          "⚠️ 未检测到计划步骤。请确保回复包含 Plan:\n1. ... 格式，或选择「继续完善计划」。",
+          "warning",
+        );
+        return;
+      }
 
-      const execMessage =
-        todoItems.length > 0
-          ? `开始执行计划。请从第一步开始: ${todoItems[0].text}`
-          : "执行你刚才创建的计划。";
+      planModeEnabled = false;
+      executionMode = true;
+      pi.setActiveTools(EXECUTION_MODE_TOOLS);
+      updateStatus(ctx);
+      persistState();
+
+      const next = getNextPendingItem(todoItems);
+      const execMessage = next
+        ? `开始执行计划。请从第 ${next.step} 步开始: ${next.text}`
+        : "执行你刚才创建的计划。";
       pi.sendMessage(
         { customType: "plan-mode-execute", content: execMessage, display: true },
         { triggerTurn: true },
@@ -383,9 +384,11 @@ ${todoList}
       }
     } else if (choice?.startsWith("❌")) {
       todoItems = [];
+      executionMode = false;
       planModeEnabled = false;
       pi.setActiveTools(NORMAL_MODE_TOOLS);
       updateStatus(ctx);
+      persistState();
       ctx.ui.notify("🗑️ 计划已取消。", "info");
     }
   });
@@ -430,9 +433,12 @@ ${todoList}
       }
       const allText = messages.map(getTextContent).join("\n");
       markCompletedSteps(allText, todoItems);
+      markSkippedSteps(allText, todoItems);
     }
 
-    if (planModeEnabled) {
+    if (executionMode) {
+      pi.setActiveTools(EXECUTION_MODE_TOOLS);
+    } else if (planModeEnabled) {
       pi.setActiveTools(PLAN_MODE_TOOLS);
     }
     updateStatus(ctx);
