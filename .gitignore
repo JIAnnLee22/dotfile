@@ -24,3 +24,14 @@ pi/.idea/
 pi/*.swp
 pi/*.swo
 pi/*~
+
+# opencode配置 - 忽略敏感信息和自动生成的文件
+opencode/node_modules/
+opencode/bun.lock
+opencode/package-lock.json
+opencode/logs/
+opencode/.cache/
+opencode/*.log
+opencode/*.tmp
+opencode/plugin/
+opencode/opencode.json
