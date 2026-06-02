@@ -13,6 +13,10 @@ import {
   generateProgressBar,
   formatPlanList,
   getNextPendingItem,
+  generatePlanMarkdown,
+  isAmbiguousStep,
+  parseAmbiguousSteps,
+  buildResolvedText,
 } from "./utils.ts";
 
 describe("splitCommandSegments", () => {
@@ -93,6 +97,21 @@ describe("extractTodoItems", () => {
     assert.equal(items[0].step, 1);
     assert.equal(items[1].step, 2);
   });
+
+  it("keeps full step text without truncation", () => {
+    const longStep = "[extensions/plan-mode/index.ts] 重构 togglePlanOverlay 的显示逻辑并修复自动显示后再次快捷键打开失败的问题，补全状态守卫与资源清理";
+    const msg = `Plan:\n1. ${longStep}`;
+    const items = extractTodoItems(msg);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].text, longStep);
+  });
+
+  it("keeps file path markers in extracted steps", () => {
+    const msg = "Plan:\n1. [src/auth/login.ts] 在 login 函数中添加参数验证逻辑";
+    const items = extractTodoItems(msg);
+    assert.equal(items.length, 1);
+    assert.match(items[0].text, /^\[src\/auth\/login\.ts\]/);
+  });
 });
 
 describe("markCompletedSteps / markSkippedSteps", () => {
@@ -147,5 +166,145 @@ describe("formatPlanList", () => {
   it("uses item.step in display", () => {
     const list = formatPlanList([{ step: 3, text: "Do thing", completed: false }]);
     assert.match(list, /^3\. /);
+  });
+});
+
+describe("generatePlanMarkdown", () => {
+  it("generates markdown with metadata table", () => {
+    const items = [
+      { step: 1, text: "First step", completed: false },
+      { step: 2, text: "Second step", completed: false },
+    ];
+    const md = generatePlanMarkdown(items, {
+      sessionId: "test-session-001",
+      cwd: "/tmp/project",
+      createdAt: "2025-06-02T10:00:00",
+      updatedAt: "2025-06-02T11:00:00",
+    });
+    assert.match(md, /# 执行计划/);
+    assert.match(md, /\| Session \| `test-session-001` \|/);
+    assert.match(md, /\| 工作目录 \| `\/tmp\/project` \|/);
+    assert.match(md, /\| 创建时间 \| 2025-06-02T10:00:00 \|/);
+    assert.match(md, /\| 更新时间 \| 2025-06-02T11:00:00 \|/);
+    assert.match(md, /\*\*0\/2\*\*/);
+  });
+
+  it("renders progress bar and step checkboxes", () => {
+    const items = [
+      { step: 1, text: "Done step", completed: true },
+      { step: 2, text: "Pending step", completed: false },
+      { step: 3, text: "Skipped step", completed: true, skipped: true },
+    ];
+    const md = generatePlanMarkdown(items, {
+      sessionId: "test-002",
+    });
+    assert.match(md, /## 进度/);
+    assert.match(md, /█.*░/);
+    assert.match(md, /\- \[x\] \*\*1\.\*\* ✅ Done step/);
+    assert.match(md, /\- \[ \] \*\*2\.\*\* Pending step/);
+    assert.match(md, /\- \[x\] \*\*3\.\*\* ⏭️ ~~Skipped step~~ \(已跳过\)/);
+  });
+
+  it("includes pending count in status", () => {
+    const items = [
+      { step: 1, text: "A", completed: true },
+      { step: 2, text: "B", completed: false },
+      { step: 3, text: "C", completed: false },
+    ];
+    const md = generatePlanMarkdown(items, { sessionId: "x" });
+    assert.match(md, /\*\*1\/3\*\* 完成/);
+    assert.match(md, /2 待执行/);
+  });
+});
+
+describe("isAmbiguousStep", () => {
+  it("returns true for steps with [?] marker", () => {
+    assert.equal(isAmbiguousStep("实现认证 [?] JWT | Session"), true);
+    assert.equal(isAmbiguousStep("选择ORM [?] Prisma / TypeORM"), true);
+    assert.equal(isAmbiguousStep("添加缓存 [?] Redis，Memcached"), true);
+  });
+
+  it("returns false for steps without [?] marker", () => {
+    assert.equal(isAmbiguousStep("添加参数验证"), false);
+    assert.equal(isAmbiguousStep("[src/auth.ts] 实现登录"), false);
+    assert.equal(isAmbiguousStep("1. [file.ts] 普通步骤"), false);
+  });
+});
+
+describe("parseAmbiguousSteps", () => {
+  it("parses pipe-separated options", () => {
+    const items = [
+      { step: 1, text: "实现认证 [?] JWT | Session | OAuth", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 1);
+    assert.equal(ambiguous[0].step, 1);
+    assert.equal(ambiguous[0].description, "实现认证");
+    assert.deepEqual(ambiguous[0].options, ["JWT", "Session", "OAuth"]);
+  });
+
+  it("parses slash-separated options", () => {
+    const items = [
+      { step: 2, text: "选择ORM [?] Prisma / TypeORM / Drizzle", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 1);
+    assert.deepEqual(ambiguous[0].options, ["Prisma", "TypeORM", "Drizzle"]);
+  });
+
+  it("parses comma-separated options", () => {
+    const items = [
+      { step: 3, text: "选择缓存 [?] Redis，Memcached，本地LRU", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 1);
+    assert.deepEqual(ambiguous[0].options, ["Redis", "Memcached", "本地LRU"]);
+  });
+
+  it("skips steps without ambiguity marker", () => {
+    const items = [
+      { step: 1, text: "清晰的步骤描述", completed: false },
+      { step: 2, text: "实现认证 [?] JWT | Session", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 1);
+    assert.equal(ambiguous[0].step, 2);
+  });
+
+  it("skips steps with less than 2 options", () => {
+    const items = [
+      { step: 1, text: "只有一个选项 [?] JWT", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 0);
+  });
+
+  it("handles multiple ambiguous steps", () => {
+    const items = [
+      { step: 1, text: "认证 [?] JWT | Session", completed: false },
+      { step: 2, text: "正常步骤", completed: false },
+      { step: 3, text: "ORM [?] Prisma | TypeORM", completed: false },
+    ];
+    const ambiguous = parseAmbiguousSteps(items);
+    assert.equal(ambiguous.length, 2);
+    assert.equal(ambiguous[0].step, 1);
+    assert.equal(ambiguous[1].step, 3);
+  });
+});
+
+describe("buildResolvedText", () => {
+  it("combines single option", () => {
+    const result = buildResolvedText("实现认证", ["JWT"]);
+    assert.equal(result, "实现认证：JWT");
+  });
+
+  it("combines multiple options with +", () => {
+    const result = buildResolvedText("实现认证", ["JWT", "Session"]);
+    assert.equal(result, "实现认证：JWT + Session");
+  });
+
+  it("handles three options", () => {
+    const result = buildResolvedText("选择方案", ["A", "B", "C"]);
+    assert.equal(result, "选择方案：A + B + C");
   });
 });

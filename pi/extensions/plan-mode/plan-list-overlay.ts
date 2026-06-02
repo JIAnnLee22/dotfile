@@ -68,7 +68,8 @@ function createPlanListComponent(
     },
 
     handleInput(data: string): void {
-      if (safeMatchesKey(data, Key.escape) || safeMatchesKey(data, Key.ctrl("p"))) {
+      // Do not bind Esc here: Esc is handled globally and may interrupt agent execution.
+      if (safeMatchesKey(data, Key.ctrlAlt("p")) || safeMatchesKey(data, Key.ctrl("p")) || matchesLiteralKey(data, "q")) {
         onClose();
         return;
       }
@@ -169,7 +170,7 @@ function createPlanListComponent(
 
       // 底部帮助
       lines.push(truncateToWidth(theme.fg("dim", "-".repeat(Math.min(width - 2, 30))), width));
-      lines.push(truncateToWidth(theme.fg("dim", "jk: scroll  PgUp/Dn: page  Esc: close"), width));
+      lines.push(truncateToWidth(theme.fg("dim", "jk: scroll  PgUp/Dn: page  Ctrl+Alt+P/q: close"), width));
 
       cachedWidth = width;
       cachedLines = lines;

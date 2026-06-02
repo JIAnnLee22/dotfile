@@ -236,23 +236,11 @@ export interface TodoItem {
  * 清理步骤文本（去除格式化符号）
  */
 export function cleanStepText(text: string): string {
-  let cleaned = text
+  return text
     .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
-    .replace(
-      /^(Use|Run|Execute|Create|Write|Read|Check|Verify|Update|Modify|Add|Remove|Delete|Install)\s+(the\s+)?/i,
-      "",
-    )
     .replace(/\s+/g, " ")
     .trim();
-
-  if (cleaned.length > 0) {
-    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
-  }
-  if (cleaned.length > 60) {
-    cleaned = `${cleaned.slice(0, 57)}...`;
-  }
-  return cleaned;
 }
 
 /**
@@ -405,4 +393,174 @@ export function formatPlanList(items: TodoItem[], showNumbers: boolean = true): 
       return `${prefix}⬜ ${item.text}`;
     })
     .join("\n");
+}
+
+/**
+ * 计划保存元数据
+ */
+export interface PlanSaveMeta {
+  sessionId: string;
+  createdAt?: string;
+  updatedAt?: string;
+  cwd?: string;
+}
+
+/**
+ * 生成计划的 Markdown 文档内容
+ */
+export function generatePlanMarkdown(items: TodoItem[], meta: PlanSaveMeta): string {
+  const sorted = [...items].sort((a, b) => a.step - b.step);
+  const completed = items.filter((t) => t.completed && !t.skipped).length;
+  const skipped = items.filter((t) => t.skipped).length;
+  const total = items.length;
+  const pending = total - completed - skipped;
+
+  const lines: string[] = [];
+
+  // 标题
+  lines.push(`# 执行计划`);
+  lines.push("");
+
+  // 元信息
+  lines.push(`| 属性 | 值 |`);
+  lines.push(`| --- | --- |`);
+  lines.push(`| Session | \`${meta.sessionId}\` |`);
+  if (meta.cwd) lines.push(`| 工作目录 | \`${meta.cwd}\` |`);
+  if (meta.createdAt) lines.push(`| 创建时间 | ${meta.createdAt} |`);
+  if (meta.updatedAt) lines.push(`| 更新时间 | ${meta.updatedAt} |`);
+  lines.push(`| 状态 | **${completed}/${total}** 完成${skipped > 0 ? `，${skipped} 跳过` : ""}${pending > 0 ? `，${pending} 待执行` : ""} |`);
+  lines.push("");
+
+  // 进度概览
+  lines.push(`## 进度`);
+  lines.push("");
+  const progress = generateProgressBar(completed, total, 20);
+  lines.push(`\`${progress}\` ${Math.round((completed / total) * 100)}%`);
+  lines.push("");
+
+  // 步骤列表
+  lines.push(`## 步骤`);
+  lines.push("");
+  for (const item of sorted) {
+    let checkbox: string;
+    let suffix = "";
+    if (item.completed && item.skipped) {
+      checkbox = "- [x]";
+      suffix = ` ⏭️ ~~${item.text}~~ (已跳过)`;
+    } else if (item.completed) {
+      checkbox = "- [x]";
+      suffix = ` ✅ ${item.text}`;
+    } else {
+      checkbox = "- [ ]";
+      suffix = ` ${item.text}`;
+    }
+    lines.push(`${checkbox} **${item.step}.**${suffix}`);
+  }
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+/**
+ * 从 TodoItem[] 生成简易计划摘要（用于文件名或通知）
+ */
+export function getPlanSummary(items: TodoItem[]): string {
+  const completed = items.filter((t) => t.completed).length;
+  const total = items.length;
+  return `${completed}/${total}`;
+}
+
+// ============================================================
+// 歧义步骤解析
+// ============================================================
+
+/**
+ * 歧义步骤类型
+ */
+export interface AmbiguousStep {
+  /** 步骤编号 */
+  step: number;
+  /** 步骤描述（去除歧义标记后的部分） */
+  description: string;
+  /** 可选方案列表 */
+  options: string[];
+  /** 原始完整文本 */
+  originalText: string;
+}
+
+/**
+ * 歧义标记正则 - 匹配 [?] 后面的所有选项文本
+ * 支持格式：
+ *   Description [?] Option1 | Option2 | Option3
+ *   Description [?] Option1 / Option2 / Option3
+ *   Description [?] Option1，Option2，Option3
+ */
+const AMBIGUOUS_PATTERN = /\[\?\]\s*(.+)$/;
+
+/**
+ * 选项分隔符：竖线 / 斜杠 / 全角竖线
+ */
+const OPTION_SEPARATOR = /[|/｜]/;
+
+/**
+ * 中文逗号分隔符（排除英文逗号在函数参数中的情况）
+ */
+const COMMA_SEPARATOR = /，|,(?![^(]*\))/;
+
+/**
+ * 检测步骤文本中是否包含歧义标记 [?]
+ */
+export function isAmbiguousStep(text: string): boolean {
+  return AMBIGUOUS_PATTERN.test(text);
+}
+
+/**
+ * 解析计划中的歧义步骤，返回需要用户选择的步骤列表
+ */
+export function parseAmbiguousSteps(items: TodoItem[]): AmbiguousStep[] {
+  const ambiguous: AmbiguousStep[] = [];
+
+  for (const item of items) {
+    const match = item.text.match(AMBIGUOUS_PATTERN);
+    if (match) {
+      const description = item.text.replace(AMBIGUOUS_PATTERN, "").trim();
+      const optionStr = match[1].trim();
+
+      // 优先用 | 或 / 分割
+      let options = optionStr
+        .split(OPTION_SEPARATOR)
+        .map((o) => o.trim())
+        .filter((o) => o.length > 0);
+
+      // 如果只分割出少于 2 个选项，尝试用中文逗号分割
+      if (options.length < 2) {
+        options = optionStr
+          .split(COMMA_SEPARATOR)
+          .map((o) => o.trim())
+          .filter((o) => o.length > 0);
+      }
+
+      // 至少需要 2 个选项才算歧义
+      if (options.length >= 2) {
+        ambiguous.push({
+          step: item.step,
+          description: description || item.text,
+          options,
+          originalText: item.text,
+        });
+      }
+    }
+  }
+
+  return ambiguous;
+}
+
+/**
+ * 将用户选择的选项组合成最终步骤文本
+ */
+export function buildResolvedText(description: string, selectedOptions: string[]): string {
+  if (selectedOptions.length === 1) {
+    return `${description}：${selectedOptions[0]}`;
+  }
+  return `${description}：${selectedOptions.join(" + ")}`;
 }
