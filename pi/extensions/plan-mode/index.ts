@@ -4,17 +4,19 @@
  * 只读探索模式，用于安全地分析代码并制定计划。
  *
  * 改进点：
- * - 更美观的 UI 显示（进度条、emoji 图标、颜色主题）
+ * - 更美观的 UI 显示（进度条、颜色主题）
  * - 更流畅的流程切换（计划模式 → 执行模式）
  * - 中文界面支持
  * - 更健壮的计划解析
  * - 支持跳过步骤
  * - 实时进度反馈
+ * - 右上角悬浮计划窗口，支持滚动
  *
  * 快捷键：
  * - /plan - 切换计划模式
  * - /todos - 显示当前进度
- * - Ctrl+Alt+P - 切换计划模式
+ * - Ctrl+Alt+L - 切换计划模式
+ * - Ctrl+P - 显示/隐藏计划悬浮窗口
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -31,6 +33,7 @@ import {
   formatPlanList,
   type TodoItem,
 } from "./utils.ts";
+import { createPlanListOverlay, type PlanListComponent } from "./plan-list-overlay.ts";
 
 // 工具列表配置（计划模式 = 只读；执行/正常模式 = 只读 + 编辑）
 const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls"] as const;
@@ -55,6 +58,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
   let planModeEnabled = false;
   let executionMode = false;
   let todoItems: TodoItem[] = [];
+  
+  // 悬浮窗口状态
+  let planOverlayHandle: { close: () => void; setHidden: (hidden: boolean) => void } | null = null;
+  let planOverlayComponent: PlanListComponent | null = null;
+  let planOverlayVisible = false;
 
   // 注册命令行参数
   pi.registerFlag("plan", {
@@ -62,6 +70,46 @@ export default function planModeExtension(pi: ExtensionAPI): void {
     type: "boolean",
     default: false,
   });
+
+  /**
+   * 显示/隐藏计划悬浮窗口
+   */
+  async function togglePlanOverlay(ctx: ExtensionContext): Promise<void> {
+    if (planOverlayVisible && planOverlayHandle) {
+      // 隐藏
+      planOverlayHandle.close();
+      planOverlayHandle = null;
+      planOverlayComponent = null;
+      planOverlayVisible = false;
+    } else if (todoItems.length > 0) {
+      // 显示
+      await ctx.ui.custom(
+        (_tui, theme, _keybindings, done) => {
+          const component = createPlanListOverlay(theme as any, () => {
+            done(undefined);
+          });
+          component.setItems(todoItems);
+          planOverlayComponent = component;
+          return component;
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            anchor: "top-right",
+            width: 45,
+            maxHeight: "60%",
+            margin: 1,
+          },
+          onHandle: (handle) => {
+            planOverlayHandle = handle;
+          },
+        }
+      );
+      planOverlayVisible = true;
+    } else {
+      ctx.ui.notify("暂无计划可显示。请先创建计划。", "info");
+    }
+  }
 
   /**
    * 更新 UI 状态显示
@@ -74,44 +122,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       const progress = generateProgressBar(completed, total, 10);
       ctx.ui.setStatus(
         "plan-mode",
-        ctx.ui.theme.fg("accent", `🚀 ${progress} ${completed}/${total}`),
+        ctx.ui.theme.fg("accent", `[EXEC] ${progress} ${completed}/${total}`),
       );
     } else if (planModeEnabled) {
-      ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "📝 计划模式"));
+      ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("warning", "[PLAN]"));
     } else {
       ctx.ui.setStatus("plan-mode", undefined);
     }
 
-    // 进度小组件
-    if (executionMode && todoItems.length > 0) {
-      const lines: string[] = [];
-      const completed = todoItems.filter((t) => t.completed).length;
-      const total = todoItems.length;
-
-      // 标题
-      lines.push(ctx.ui.theme.fg("accent", `📋 执行进度 (${completed}/${total})`));
-      lines.push("");
-
-      // 进度条
-      const progressBar = generateProgressBar(completed, total, 16);
-      lines.push(ctx.ui.theme.fg("muted", `  ${progressBar}`));
-      lines.push("");
-
-      // 步骤列表
-      for (const item of [...todoItems].sort((a, b) => a.step - b.step)) {
-        const label = `${item.step}. ${item.text}`;
-        if (item.completed && item.skipped) {
-          lines.push(ctx.ui.theme.fg("muted", `  ⏭️  ${label}`));
-        } else if (item.completed) {
-          lines.push(ctx.ui.theme.fg("success", `  ✅ ${label}`));
-        } else {
-          lines.push(`  ⬜ ${label}`);
-        }
-      }
-
-      ctx.ui.setWidget("plan-todos", lines);
-    } else {
-      ctx.ui.setWidget("plan-todos", undefined);
+    // 更新悬浮窗口内容
+    if (planOverlayComponent && planOverlayVisible) {
+      planOverlayComponent.setItems(todoItems);
     }
   }
 
@@ -125,10 +146,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
     if (planModeEnabled) {
       pi.setActiveTools(PLAN_MODE_TOOLS);
-      ctx.ui.notify("📝 计划模式已启用\n\n可用工具: read, bash (只读), grep, find, ls\n\n请分析代码并创建计划。", "info");
+      ctx.ui.notify("[PLAN] 计划模式已启用\n\n可用工具: read, bash (只读), grep, find, ls\n\n请分析代码并创建计划。\n按 Ctrl+Alt+L 切换计划模式，按 Ctrl+P 显示/隐藏计划窗口。", "info");
     } else {
       pi.setActiveTools(NORMAL_MODE_TOOLS);
-      ctx.ui.notify("🔓 计划模式已禁用，完整访问权限已恢复。", "info");
+      // 关闭悬浮窗口
+      if (planOverlayHandle) {
+        planOverlayHandle.close();
+        planOverlayHandle = null;
+        planOverlayComponent = null;
+        planOverlayVisible = false;
+      }
+      ctx.ui.notify("[PLAN] 计划模式已禁用，完整访问权限已恢复。", "info");
     }
     updateStatus(ctx);
   }
@@ -155,7 +183,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
     description: "显示当前计划进度",
     handler: async (_args, ctx) => {
       if (todoItems.length === 0) {
-        ctx.ui.notify("📋 暂无计划。请先使用 /plan 启用计划模式，然后创建计划。", "info");
+        ctx.ui.notify("暂无计划。请先使用 /plan 启用计划模式，然后创建计划。", "info");
         return;
       }
       const list = formatPlanList(todoItems);
@@ -163,16 +191,22 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       const total = todoItems.length;
       const progress = generateProgressBar(completed, total, 20);
       ctx.ui.notify(
-        `📊 计划进度 ${completed}/${total}\n${progress}\n\n${list}`,
+        `计划进度 ${completed}/${total}\n${progress}\n\n${list}`,
         "info",
       );
     },
   });
 
-  // 注册快捷键
-  pi.registerShortcut(Key.ctrlAlt("p"), {
+  // 注册快捷键 - 切换计划模式
+  pi.registerShortcut(Key.ctrlAlt("l"), {
     description: "切换计划模式",
     handler: async (ctx) => togglePlanMode(ctx),
+  });
+
+  // 注册快捷键 - 显示/隐藏计划悬浮窗口
+  pi.registerShortcut(Key.ctrl("p"), {
+    description: "显示/隐藏计划悬浮窗口",
+    handler: async (ctx) => togglePlanOverlay(ctx),
   });
 
   // 拦截危险的 bash 命令
@@ -183,7 +217,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
     if (!isSafeCommand(command)) {
       return {
         block: true,
-        reason: `🚫 计划模式：命令被阻止（不在允许列表中）\n\n命令: ${command}\n\n如需执行修改操作，请先使用 /plan 退出计划模式。`,
+        reason: `[PLAN] 计划模式：命令被阻止（不在允许列表中）\n\n命令: ${command}\n\n如需执行修改操作，请先使用 /plan 退出计划模式。`,
       };
     }
   });
@@ -218,30 +252,36 @@ export default function planModeExtension(pi: ExtensionAPI): void {
       return {
         message: {
           customType: "plan-mode-context",
-          content: `[📝 计划模式已激活]
+          content: `[计划模式已激活]
 
 你当前处于计划模式 - 一个用于安全代码分析的只读探索模式。
 
-🔒 限制：
+[限制]
 - 只能使用: read, bash (只读命令), grep, find, ls
 - 不能使用: edit, write（文件修改已禁用）
 - Bash 命令仅限于安全的只读命令
 
-📋 任务：
-1. 分析代码结构和逻辑
-2. 识别需要修改的部分
-3. 创建详细的执行计划
+[任务]
+1. 深入分析代码结构、逻辑和依赖关系
+2. 精确定位需要修改的文件、函数和代码行
+3. 创建详细的执行计划，每步说明具体修改内容
 
-✅ 创建计划：
+[创建计划]
 请在响应中使用以下格式创建计划：
 
 Plan:
-1. 第一步描述
-2. 第二步描述
-3. 第三步描述
+1. [文件路径] 修改描述：具体说明要修改什么内容
+2. [文件路径] 修改描述：具体说明要修改什么内容
+3. [文件路径] 修改描述：具体说明要修改什么内容
 ...
 
-⚠️ 重要：不要尝试进行任何修改，只需描述你会做什么。`,
+[计划要求]
+- 每一步必须明确指出涉及的文件路径（如 src/auth/login.ts）
+- 每一步必须简要说明具体的修改内容（如：在 login 函数中添加参数验证逻辑）
+- 避免模糊描述（如"修改代码"、"更新文件"）
+- 如果涉及多个文件的关联修改，应在同一步骤中说明
+
+[重要] 不要尝试进行任何修改，只需详细描述你会做什么。`,
           display: false,
         },
       };
@@ -253,17 +293,17 @@ Plan:
       return {
         message: {
           customType: "plan-execution-context",
-          content: `[🚀 执行计划中 - 完整工具访问已启用]
+          content: `[执行计划中 - 完整工具访问已启用]
 
 剩余步骤:
 ${todoList}
 
-📋 执行规则：
+[执行规则]
 1. 按顺序执行每个步骤
 2. 完成步骤后，在响应中包含 [DONE:n] 标记（n 为步骤编号）
 3. 如需跳过某步骤，使用 [SKIP:n] 标记
 
-⚠️ 请确保每个步骤都得到妥善处理。`,
+请确保每个步骤都得到妥善处理。`,
           display: false,
         },
       };
@@ -293,12 +333,12 @@ ${todoList}
     if (executionMode && todoItems.length > 0) {
       if (todoItems.every((t) => t.completed || t.skipped)) {
         const completedList = todoItems
-          .map((t) => (t.skipped ? `⏭️ ~~${t.text}~~` : `✅ ~~${t.text}~~`))
+          .map((t) => (t.skipped ? `[SKIP] ${t.text}` : `[DONE] ${t.text}`))
           .join("\n");
 
         const skippedCount = todoItems.filter((t) => t.skipped).length;
         const completedCount = todoItems.filter((t) => t.completed && !t.skipped).length;
-        const summary = `🎉 计划执行完成！\n\n✅ 完成: ${completedCount}\n⏭️ 跳过: ${skippedCount}\n📋 总计: ${todoItems.length}\n\n${completedList}`;
+        const summary = `[完成] 计划执行完成！\n\n完成: ${completedCount}\n跳过: ${skippedCount}\n总计: ${todoItems.length}\n\n${completedList}`;
 
         pi.sendMessage(
           { customType: "plan-complete", content: summary, display: true },
@@ -307,6 +347,15 @@ ${todoList}
         executionMode = false;
         todoItems = [];
         pi.setActiveTools(NORMAL_MODE_TOOLS);
+        
+        // 关闭悬浮窗口
+        if (planOverlayHandle) {
+          planOverlayHandle.close();
+          planOverlayHandle = null;
+          planOverlayComponent = null;
+          planOverlayVisible = false;
+        }
+        
         updateStatus(ctx);
         persistState();
       }
@@ -327,37 +376,41 @@ ${todoList}
     // 显示计划步骤
     if (todoItems.length > 0) {
       const planDisplay = formatPlanList(todoItems);
-      const completed = todoItems.filter((t) => t.completed).length;
       const total = todoItems.length;
       pi.sendMessage(
         {
           customType: "plan-todo-list",
-          content: `📋 **计划已创建** (${total} 步)\n\n${planDisplay}`,
+          content: `**计划已创建** (${total} 步)\n\n${planDisplay}\n\n按 Ctrl+P 显示/隐藏计划悬浮窗口`,
           display: true,
         },
         { triggerTurn: false },
       );
+      
+      // 自动显示悬浮窗口
+      if (!planOverlayVisible) {
+        await togglePlanOverlay(ctx);
+      }
     }
 
     // 选择下一步操作
     const choices = todoItems.length > 0
       ? [
-          "🚀 执行计划（跟踪进度）",
-          "📝 继续完善计划",
-          "❌ 取消计划",
+          "执行计划（跟踪进度）",
+          "继续完善计划",
+          "取消计划",
         ]
       : [
-          "🚀 执行计划",
-          "📝 继续完善计划",
-          "❌ 取消计划",
+          "执行计划",
+          "继续完善计划",
+          "取消计划",
         ];
 
     const choice = await ctx.ui.select("计划模式 - 下一步操作？", choices);
 
-    if (choice?.startsWith("🚀")) {
+    if (choice?.startsWith("执行")) {
       if (todoItems.length === 0) {
         ctx.ui.notify(
-          "⚠️ 未检测到计划步骤。请确保回复包含 Plan:\n1. ... 格式，或选择「继续完善计划」。",
+          "未检测到计划步骤。请确保回复包含 Plan:\n1. [文件路径] 修改描述 格式，或选择「继续完善计划」。",
           "warning",
         );
         return;
@@ -377,19 +430,28 @@ ${todoList}
         { customType: "plan-mode-execute", content: execMessage, display: true },
         { triggerTurn: true },
       );
-    } else if (choice?.startsWith("📝")) {
+    } else if (choice?.startsWith("继续")) {
       const refinement = await ctx.ui.editor("请完善或修改计划：", "");
       if (refinement?.trim()) {
         pi.sendUserMessage(refinement.trim());
       }
-    } else if (choice?.startsWith("❌")) {
+    } else if (choice?.startsWith("取消")) {
       todoItems = [];
       executionMode = false;
       planModeEnabled = false;
       pi.setActiveTools(NORMAL_MODE_TOOLS);
+      
+      // 关闭悬浮窗口
+      if (planOverlayHandle) {
+        planOverlayHandle.close();
+        planOverlayHandle = null;
+        planOverlayComponent = null;
+        planOverlayVisible = false;
+      }
+      
       updateStatus(ctx);
       persistState();
-      ctx.ui.notify("🗑️ 计划已取消。", "info");
+      ctx.ui.notify("计划已取消。", "info");
     }
   });
 
