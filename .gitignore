@@ -24,6 +24,7 @@ pi/.idea/
 pi/*.swp
 pi/*.swo
 pi/*~
+/pi/.plans
 
 # opencode配置 - 忽略敏感信息和自动生成的文件
 opencode/node_modules/
