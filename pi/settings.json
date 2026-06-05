@@ -9,6 +9,6 @@
   ],
   "lastChangelogVersion": "0.78.1",
   "defaultProvider": "cursor",
-  "defaultModel": "default",
+  "defaultModel": "composer-2.5",
   "defaultThinkingLevel": "high"
 }

@@ -1,5 +1,5 @@
 /**
- * 工具函数 - 命令安全检查与计划解析
+ * 计划模式工具函数
  */
 
 // 危险命令模式（按管道/逻辑段检测）
@@ -37,7 +37,6 @@ const DESTRUCTIVE_PATTERNS = [
   /\b(vim?|nano|emacs|code|subl)\b/i,
 ];
 
-// 安全的只读命令（每个管道/逻辑段必须以其中之一开头）
 const SAFE_PATTERNS = [
   /^\s*cat\b/,
   /^\s*head\b/,
@@ -97,9 +96,6 @@ const SAFE_PATTERNS = [
   /^\s*\[/,
 ];
 
-/**
- * 将 shell 命令按管道与逻辑运算符拆成段（不处理引号内的运算符）
- */
 export function splitCommandSegments(command: string): string[] {
   const segments: string[] = [];
   let current = "";
@@ -121,10 +117,7 @@ export function splitCommandSegments(command: string): string[] {
 
     if (c === "\\") {
       current += c;
-      // In shell, backslash inside single quotes is literal.
-      if (!inSingle) {
-        escaped = true;
-      }
+      if (!inSingle) escaped = true;
       continue;
     }
 
@@ -186,22 +179,15 @@ export function splitCommandSegments(command: string): string[] {
   return segments.length > 0 ? segments : [command.trim()];
 }
 
-/**
- * 检测会写入文件的输出重定向（允许 2>/dev/null、2>&1、&>/dev/null）
- */
 export function hasUnsafeRedirect(segment: string): boolean {
   const withoutAllowedStderrRedirects = segment
-    // Keep stderr suppression/merging available in plan mode.
     .replace(/(^|[^\d])2>>?\s*\/dev\/null\b/g, "$1")
     .replace(/(^|[^\d])2>\s*&1\b/g, "$1")
     .replace(/(^|[^\d])&>>?\s*\/dev\/null\b/g, "$1")
     .replace(/(^|[^\d])&>\s*&1\b/g, "$1");
 
-  // Block stdout/combined redirects (e.g. >, >>, 1>, 1>>, >|, 1>|).
   if (/(?:^|[^\d])(?:\d+)?>>\s*\S/.test(withoutAllowedStderrRedirects)) return true;
   if (/(?:^|[^\d])(?:\d+)?>\|?\s*\S/.test(withoutAllowedStderrRedirects)) return true;
-
-  // Block read/write file opening (e.g. <>, 0<>).
   return /(?:^|[^\d])(?:\d+)?<>\s*\S/.test(withoutAllowedStderrRedirects);
 }
 
@@ -213,18 +199,12 @@ function segmentIsSafe(segment: string): boolean {
   return SAFE_PATTERNS.some((p) => p.test(trimmed));
 }
 
-/**
- * 检查命令是否安全（只读）- 支持管道与逻辑组合
- */
 export function isSafeCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!trimmed) return false;
   return splitCommandSegments(trimmed).every(segmentIsSafe);
 }
 
-/**
- * 计划项类型
- */
 export interface TodoItem {
   step: number;
   text: string;
@@ -232,9 +212,17 @@ export interface TodoItem {
   skipped?: boolean;
 }
 
-/**
- * 清理步骤文本（去除格式化符号）
- */
+export interface StructuredPlan {
+  overview: string;
+  approach: string;
+  keyFiles: string;
+  risks: string;
+  verification: string;
+  steps: TodoItem[];
+  questions: string[];
+  rawMarkdown: string;
+}
+
 export function cleanStepText(text: string): string {
   return text
     .replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1")
@@ -243,31 +231,62 @@ export function cleanStepText(text: string): string {
     .trim();
 }
 
-/**
- * 从消息中提取计划步骤（保留 Plan 中的原始编号）
- */
+function extractSection(message: string, titles: string[]): string {
+  for (const title of titles) {
+    const pattern = new RegExp(
+      `(?:^|\\n)#{1,3}\\s*${title}\\s*\\n([\\s\\S]*?)(?=\\n#{1,3}\\s|$)`,
+      "i",
+    );
+    const match = message.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+  return "";
+}
+
+export function extractClarifyingQuestions(message: string): string[] {
+  const section = extractSection(message, [
+    "澄清问题",
+    "Clarifying Questions",
+    "Questions",
+    "待澄清",
+  ]);
+  if (!section) return [];
+
+  const questions: string[] = [];
+  for (const line of section.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const m = trimmed.match(/^(?:[-*]|\d+[.)])\s+(.+)$/);
+    if (m?.[1]) {
+      const q = cleanStepText(m[1]);
+      if (q.length > 3) questions.push(q);
+    }
+  }
+  return questions;
+}
+
 export function extractTodoItems(message: string): TodoItem[] {
   const items: TodoItem[] = [];
-  const headerMatch = message.match(/\*{0,2}(?:Plan|计划|TODO|步骤):\*{0,2}/i);
-  if (!headerMatch || headerMatch.index === undefined) return items;
+  const section = extractSection(message, ["执行步骤", "Steps", "Plan", "计划", "TODO", "步骤"]);
+  const searchText = section || message;
 
-  // 仅解析 Plan 标题后的连续步骤块，避免误抓后续普通编号列表。
-  const planSection = message.slice(headerMatch.index + headerMatch[0].length);
+  const headerMatch = searchText.match(/\*{0,2}(?:Plan|计划|TODO|步骤):\*{0,2}/i);
+  const planSection = headerMatch
+    ? searchText.slice((headerMatch.index ?? 0) + headerMatch[0].length)
+    : searchText;
+
   const lines = planSection.split(/\r?\n/);
   const usedSteps = new Set<number>();
   const stepLinePattern = /^\s*(\d+)[.)]\s+(.+)$/;
   const blankLinePattern = /^\s*$/;
-  let started = false;
+  let started = !!headerMatch;
 
   for (const line of lines) {
     const stepMatch = line.match(stepLinePattern);
     if (stepMatch) {
       started = true;
       const step = Number(stepMatch[1]);
-      const text = stepMatch[2]
-        .trim()
-        .replace(/\*{1,2}$/, "")
-        .trim();
+      const text = stepMatch[2].trim().replace(/\*{1,2}$/, "").trim();
 
       if (
         Number.isFinite(step) &&
@@ -288,12 +307,10 @@ export function extractTodoItems(message: string): TodoItem[] {
     }
 
     if (!started) {
-      // 支持 "Plan:" 之后先出现空行或说明。
       if (blankLinePattern.test(line)) continue;
       continue;
     }
 
-    // 步骤块开始后，允许空行（常见于 markdown 列表排版）；遇到其它内容即停止解析。
     if (blankLinePattern.test(line)) continue;
     break;
   }
@@ -301,16 +318,35 @@ export function extractTodoItems(message: string): TodoItem[] {
   return items.sort((a, b) => a.step - b.step);
 }
 
-/**
- * 按 step 排序后的下一待办项
- */
+export function extractStructuredPlan(message: string): StructuredPlan {
+  const overview = extractSection(message, ["概述", "Overview", "概览"]);
+  const approach = extractSection(message, ["方案", "Approach", "实现方案"]);
+  const keyFiles = extractSection(message, ["关键文件", "Key Files", "涉及文件"]);
+  const risks = extractSection(message, ["风险", "Risks", "风险与权衡"]);
+  const verification = extractSection(message, ["验证", "Verification", "测试计划"]);
+  const steps = extractTodoItems(message);
+  const questions = extractClarifyingQuestions(message);
+
+  return {
+    overview,
+    approach,
+    keyFiles,
+    risks,
+    verification,
+    steps,
+    questions,
+    rawMarkdown: message.trim(),
+  };
+}
+
+export function hasActionablePlan(plan: StructuredPlan): boolean {
+  return plan.steps.length > 0;
+}
+
 export function getNextPendingItem(items: TodoItem[]): TodoItem | undefined {
   return [...items].sort((a, b) => a.step - b.step).find((t) => !t.completed);
 }
 
-/**
- * 提取已完成的步骤编号
- */
 export function extractDoneSteps(message: string): number[] {
   const steps = new Set<number>();
   for (const match of message.matchAll(/\[DONE:(\d+)\]/gi)) {
@@ -320,9 +356,6 @@ export function extractDoneSteps(message: string): number[] {
   return [...steps].sort((a, b) => a - b);
 }
 
-/**
- * 提取跳过的步骤编号
- */
 export function extractSkipSteps(message: string): number[] {
   const steps = new Set<number>();
   for (const match of message.matchAll(/\[SKIP:(\d+)\]/gi)) {
@@ -332,9 +365,6 @@ export function extractSkipSteps(message: string): number[] {
   return [...steps].sort((a, b) => a - b);
 }
 
-/**
- * 标记已完成的步骤
- */
 export function markCompletedSteps(text: string, items: TodoItem[]): number {
   const doneSteps = extractDoneSteps(text);
   let changed = 0;
@@ -348,9 +378,6 @@ export function markCompletedSteps(text: string, items: TodoItem[]): number {
   return changed;
 }
 
-/**
- * 标记跳过的步骤
- */
 export function markSkippedSteps(text: string, items: TodoItem[]): number {
   const skipSteps = extractSkipSteps(text);
   let changed = 0;
@@ -365,9 +392,6 @@ export function markSkippedSteps(text: string, items: TodoItem[]): number {
   return changed;
 }
 
-/**
- * 生成进度条
- */
 export function generateProgressBar(completed: number, total: number, width: number = 20): string {
   if (total === 0) return "";
   const ratio = completed / total;
@@ -376,39 +400,31 @@ export function generateProgressBar(completed: number, total: number, width: num
   return "█".repeat(filled) + "░".repeat(empty);
 }
 
-/**
- * 格式化计划列表（用于显示，编号与 [DONE:n] 一致）
- */
 export function formatPlanList(items: TodoItem[], showNumbers: boolean = true): string {
   const sorted = [...items].sort((a, b) => a.step - b.step);
   return sorted
     .map((item) => {
       const prefix = showNumbers ? `${item.step}. ` : "";
-      if (item.completed && item.skipped) {
-        return `${prefix}⏭️ ${item.text} (已跳过)`;
-      }
-      if (item.completed) {
-        return `${prefix}✅ ${item.text}`;
-      }
+      if (item.completed && item.skipped) return `${prefix}⏭️ ${item.text} (已跳过)`;
+      if (item.completed) return `${prefix}✅ ${item.text}`;
       return `${prefix}⬜ ${item.text}`;
     })
     .join("\n");
 }
 
-/**
- * 计划保存元数据
- */
 export interface PlanSaveMeta {
   sessionId: string;
+  phase?: string;
   createdAt?: string;
   updatedAt?: string;
   cwd?: string;
 }
 
-/**
- * 生成计划的 Markdown 文档内容
- */
-export function generatePlanMarkdown(items: TodoItem[], meta: PlanSaveMeta): string {
+export function generatePlanMarkdown(
+  items: TodoItem[],
+  meta: PlanSaveMeta,
+  structured?: Pick<StructuredPlan, "overview" | "approach" | "keyFiles" | "risks" | "verification">,
+): string {
   const sorted = [...items].sort((a, b) => a.step - b.step);
   const completed = items.filter((t) => t.completed && !t.skipped).length;
   const skipped = items.filter((t) => t.skipped).length;
@@ -416,29 +432,51 @@ export function generatePlanMarkdown(items: TodoItem[], meta: PlanSaveMeta): str
   const pending = total - completed - skipped;
 
   const lines: string[] = [];
-
-  // 标题
   lines.push(`# 执行计划`);
   lines.push("");
-
-  // 元信息
   lines.push(`| 属性 | 值 |`);
   lines.push(`| --- | --- |`);
   lines.push(`| Session | \`${meta.sessionId}\` |`);
+  if (meta.phase) lines.push(`| 阶段 | **${meta.phase}** |`);
   if (meta.cwd) lines.push(`| 工作目录 | \`${meta.cwd}\` |`);
   if (meta.createdAt) lines.push(`| 创建时间 | ${meta.createdAt} |`);
   if (meta.updatedAt) lines.push(`| 更新时间 | ${meta.updatedAt} |`);
-  lines.push(`| 状态 | **${completed}/${total}** 完成${skipped > 0 ? `，${skipped} 跳过` : ""}${pending > 0 ? `，${pending} 待执行` : ""} |`);
+  lines.push(
+    `| 状态 | **${completed}/${total}** 完成${skipped > 0 ? `，${skipped} 跳过` : ""}${pending > 0 ? `，${pending} 待执行` : ""} |`,
+  );
   lines.push("");
 
-  // 进度概览
+  if (structured?.overview) {
+    lines.push(`## 概述`);
+    lines.push("");
+    lines.push(structured.overview);
+    lines.push("");
+  }
+  if (structured?.approach) {
+    lines.push(`## 方案`);
+    lines.push("");
+    lines.push(structured.approach);
+    lines.push("");
+  }
+  if (structured?.keyFiles) {
+    lines.push(`## 关键文件`);
+    lines.push("");
+    lines.push(structured.keyFiles);
+    lines.push("");
+  }
+  if (structured?.risks) {
+    lines.push(`## 风险`);
+    lines.push("");
+    lines.push(structured.risks);
+    lines.push("");
+  }
+
   lines.push(`## 进度`);
   lines.push("");
   const progress = generateProgressBar(completed, total, 20);
-  lines.push(`\`${progress}\` ${Math.round((completed / total) * 100)}%`);
+  lines.push(`\`${progress}\` ${total > 0 ? Math.round((completed / total) * 100) : 0}%`);
   lines.push("");
 
-  // 步骤列表
   lines.push(`## 步骤`);
   lines.push("");
   for (const item of sorted) {
@@ -458,65 +496,36 @@ export function generatePlanMarkdown(items: TodoItem[], meta: PlanSaveMeta): str
   }
   lines.push("");
 
+  if (structured?.verification) {
+    lines.push(`## 验证`);
+    lines.push("");
+    lines.push(structured.verification);
+    lines.push("");
+  }
+
   return lines.join("\n");
 }
 
-/**
- * 从 TodoItem[] 生成简易计划摘要（用于文件名或通知）
- */
 export function getPlanSummary(items: TodoItem[]): string {
   const completed = items.filter((t) => t.completed).length;
-  const total = items.length;
-  return `${completed}/${total}`;
+  return `${completed}/${items.length}`;
 }
 
-// ============================================================
-// 歧义步骤解析
-// ============================================================
-
-/**
- * 歧义步骤类型
- */
 export interface AmbiguousStep {
-  /** 步骤编号 */
   step: number;
-  /** 步骤描述（去除歧义标记后的部分） */
   description: string;
-  /** 可选方案列表 */
   options: string[];
-  /** 原始完整文本 */
   originalText: string;
 }
 
-/**
- * 歧义标记正则 - 匹配 [?] 后面的所有选项文本
- * 支持格式：
- *   Description [?] Option1 | Option2 | Option3
- *   Description [?] Option1 / Option2 / Option3
- *   Description [?] Option1，Option2，Option3
- */
 const AMBIGUOUS_PATTERN = /\[\?\]\s*(.+)$/;
-
-/**
- * 选项分隔符：竖线 / 斜杠 / 全角竖线
- */
 const OPTION_SEPARATOR = /[|/｜]/;
-
-/**
- * 中文逗号分隔符（排除英文逗号在函数参数中的情况）
- */
 const COMMA_SEPARATOR = /，|,(?![^(]*\))/;
 
-/**
- * 检测步骤文本中是否包含歧义标记 [?]
- */
 export function isAmbiguousStep(text: string): boolean {
   return AMBIGUOUS_PATTERN.test(text);
 }
 
-/**
- * 解析计划中的歧义步骤，返回需要用户选择的步骤列表
- */
 export function parseAmbiguousSteps(items: TodoItem[]): AmbiguousStep[] {
   const ambiguous: AmbiguousStep[] = [];
 
@@ -526,13 +535,11 @@ export function parseAmbiguousSteps(items: TodoItem[]): AmbiguousStep[] {
       const description = item.text.replace(AMBIGUOUS_PATTERN, "").trim();
       const optionStr = match[1].trim();
 
-      // 优先用 | 或 / 分割
       let options = optionStr
         .split(OPTION_SEPARATOR)
         .map((o) => o.trim())
         .filter((o) => o.length > 0);
 
-      // 如果只分割出少于 2 个选项，尝试用中文逗号分割
       if (options.length < 2) {
         options = optionStr
           .split(COMMA_SEPARATOR)
@@ -540,7 +547,6 @@ export function parseAmbiguousSteps(items: TodoItem[]): AmbiguousStep[] {
           .filter((o) => o.length > 0);
       }
 
-      // 至少需要 2 个选项才算歧义
       if (options.length >= 2) {
         ambiguous.push({
           step: item.step,
@@ -555,12 +561,18 @@ export function parseAmbiguousSteps(items: TodoItem[]): AmbiguousStep[] {
   return ambiguous;
 }
 
-/**
- * 将用户选择的选项组合成最终步骤文本
- */
 export function buildResolvedText(description: string, selectedOptions: string[]): string {
-  if (selectedOptions.length === 1) {
-    return `${description}：${selectedOptions[0]}`;
-  }
+  if (selectedOptions.length === 1) return `${description}：${selectedOptions[0]}`;
   return `${description}：${selectedOptions.join(" + ")}`;
+}
+
+export function formatStructuredSummary(plan: StructuredPlan): string {
+  const parts: string[] = [];
+  if (plan.overview) parts.push(`**概述**\n${plan.overview}`);
+  if (plan.approach) parts.push(`**方案**\n${plan.approach}`);
+  if (plan.keyFiles) parts.push(`**关键文件**\n${plan.keyFiles}`);
+  if (plan.risks) parts.push(`**风险**\n${plan.risks}`);
+  if (plan.steps.length > 0) parts.push(`**步骤**\n${formatPlanList(plan.steps)}`);
+  if (plan.verification) parts.push(`**验证**\n${plan.verification}`);
+  return parts.join("\n\n");
 }
