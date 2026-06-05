@@ -7,7 +7,7 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.78.0",
+  "lastChangelogVersion": "0.78.1",
   "defaultProvider": "cursor",
   "defaultModel": "default",
   "defaultThinkingLevel": "high"
