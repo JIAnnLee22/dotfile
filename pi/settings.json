@@ -1,4 +1,7 @@
 {
+  "extensions": [
+    "~/.config/pi/extensions/devin"
+  ],
   "packages": [
     "npm:@offbynan/pi-cursor-provider",
     "git:github.com/badlogic/pi-skills",
@@ -7,8 +10,9 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.78.1",
-  "defaultProvider": "cursor",
-  "defaultModel": "composer-2.5",
-  "defaultThinkingLevel": "high"
+  "lastChangelogVersion": "0.79.6",
+  "defaultProvider": "xiaomi",
+  "defaultModel": "mimo-v2.5-pro",
+  "defaultThinkingLevel": "high",
+  "theme": "dark"
 }
