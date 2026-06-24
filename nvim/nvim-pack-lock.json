@@ -1,5 +1,9 @@
 {
   "plugins": {
+    "LuaSnip": {
+      "rev": "0abc8f390b278c3b4aabc4c004ac8a088b65cf24",
+      "src": "https://github.com/L3MON4D3/LuaSnip"
+    },
     "blink.cmp": {
       "rev": "327fff91fe6af358e990be7be1ec8b78037d2138",
       "src": "https://github.com/saghen/blink.cmp"
@@ -7,6 +11,26 @@
     "bufferline.nvim": {
       "rev": "655133c3b4c3e5e05ec549b9f8cc2894ac6f51b3",
       "src": "https://github.com/akinsho/bufferline.nvim"
+    },
+    "cmp-buffer": {
+      "rev": "b74fab3656eea9de20a9b8116afa3cfc4ec09657",
+      "src": "https://github.com/hrsh7th/cmp-buffer"
+    },
+    "cmp-cmdline": {
+      "rev": "d126061b624e0af6c3a556428712dd4d4194ec6d",
+      "src": "https://github.com/hrsh7th/cmp-cmdline"
+    },
+    "cmp-nvim-lsp": {
+      "rev": "cbc7b02bb99fae35cb42f514762b89b5126651ef",
+      "src": "https://github.com/hrsh7th/cmp-nvim-lsp"
+    },
+    "cmp-path": {
+      "rev": "c642487086dbd9a93160e1679a1327be111cbc25",
+      "src": "https://github.com/hrsh7th/cmp-path"
+    },
+    "cmp_luasnip": {
+      "rev": "98d9cb5c2c38532bd9bdb481067b20fea8f32e90",
+      "src": "https://github.com/saadparwaiz1/cmp_luasnip"
     },
     "conform.nvim": {
       "rev": "dca1a190aa85f9065979ef35802fb77131911106",
@@ -32,6 +56,10 @@
       "rev": "707049feaca9ae65abb3696eff9aefc7879e66aa",
       "src": "https://github.com/smoka7/hop.nvim"
     },
+    "lspkind.nvim": {
+      "rev": "c7274c48137396526b59d86232eabcdc7fed8a32",
+      "src": "https://github.com/onsails/lspkind.nvim"
+    },
     "mason-lspconfig.nvim": {
       "rev": "7b01e2974a47d489bb92f47a41e4c0088ea8f86e",
       "src": "https://github.com/mason-org/mason-lspconfig.nvim"
@@ -51,6 +79,10 @@
     "nvim-autopairs": {
       "rev": "59bce2eef357189c3305e25bc6dd2d138c1683f5",
       "src": "https://github.com/windwp/nvim-autopairs"
+    },
+    "nvim-cmp": {
+      "rev": "a1d504892f2bc56c2e79b65c6faded2fd21f3eca",
+      "src": "https://github.com/hrsh7th/nvim-cmp"
     },
     "nvim-lspconfig": {
       "rev": "bf5abe69c1874531f359a822d0cff4d73e26113f",

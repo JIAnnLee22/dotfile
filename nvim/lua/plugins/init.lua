@@ -7,10 +7,16 @@ M.plugins_list = {
     { src = "https://github.com/stevearc/oil.nvim" }, -- 文件管理
   },
   lsp = {
-    { src = "https://github.com/mason-org/mason-lspconfig.nvim" }, -- lsp配置
-    { src = "https://github.com/mason-org/mason.nvim" },           -- lsp配置
     { src = "https://github.com/neovim/nvim-lspconfig" },          -- lsp配置
     { src = "https://github.com/stevearc/conform.nvim" },          -- 格式化配置
+    { src = "https://github.com/hrsh7th/nvim-cmp" },               -- 补全核心
+    { src = "https://github.com/hrsh7th/cmp-nvim-lsp" },           -- LSP 补全来源
+    { src = "https://github.com/hrsh7th/cmp-buffer" },             -- buffer 补全
+    { src = "https://github.com/hrsh7th/cmp-path" },               -- 路径补全
+    { src = "https://github.com/hrsh7th/cmp-cmdline" },            -- 命令行补全
+    { src = "https://github.com/L3MON4D3/LuaSnip" },              -- 代码片段引擎
+    { src = "https://github.com/saadparwaiz1/cmp_luasnip" },       -- LuaSnip 补全来源
+    { src = "https://github.com/onsails/lspkind.nvim" },           -- 补全菜单图标
   },
   ui = {
     { src = "https://github.com/mofiqul/dracula.nvim" },        -- 德古拉颜色主题
@@ -38,11 +44,74 @@ vim.cmd([[colorscheme dracula]])
 
 
 
-require("mason").setup()
+-- 补全配置
+local cmp_ok, cmp = pcall(require, "cmp")
+local luasnip_ok, luasnip = pcall(require, "luasnip")
+local lspkind_ok, lspkind = pcall(require, "lspkind")
+if cmp_ok then
+  if luasnip_ok then
+    cmp.setup {
+      snippet = {
+        expand = function(args)
+          luasnip.lsp_expand(args.body)
+        end,
+      },
+      mapping = cmp.mapping.preset.insert {
+        ["<C-Space>"] = cmp.mapping.complete(),
+        ["<C-e>"] = cmp.mapping.abort(),
+        ["<CR>"] = cmp.mapping.confirm({ select = true }),
+        ["<Tab>"] = cmp.mapping(function(fallback)
+          if cmp.visible() then
+            cmp.select_next_item()
+          elseif luasnip.expandable() then
+            luasnip.expand()
+          else
+            fallback()
+          end
+        end, { "i", "s" }),
+        ["<S-Tab>"] = cmp.mapping(function(fallback)
+          if cmp.visible() then
+            cmp.select_prev_item()
+          else
+            fallback()
+          end
+        end, { "i", "s" }),
+      },
+      sources = cmp.config.sources {
+        { name = "nvim_lsp" },
+        { name = "luasnip" },
+        { name = "buffer" },
+        { name = "path" },
+      },
+      formatting = {
+        format = lspkind_ok and lspkind.cmp_format {
+          mode = "symbol",
+          menu = {
+            nvim_lsp = "LSP",
+            luasnip = "Snip",
+            buffer = "Buf",
+            path = "Path",
+          },
+        } or nil,
+      },
+    }
 
-require("mason-lspconfig").setup {
-  automatic_enable = true
-}
+    -- 命令行补全配置
+    cmp.setup.cmdline(":", {
+      mapping = cmp.mapping.preset.cmdline(),
+      sources = cmp.config.sources(
+        { { name = "path" } },
+        { { name = "cmdline" } }
+      ),
+    })
+
+    -- 搜索补全配置
+    cmp.setup.cmdline("/", {
+      mapping = cmp.mapping.preset.cmdline(),
+      sources = { { name = "buffer" } },
+    })
+  end
+end
 
 -- 插件配置文件导入
 require("plugins.editor")
