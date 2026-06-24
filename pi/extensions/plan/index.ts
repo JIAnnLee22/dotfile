@@ -402,7 +402,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       const cheap = modelConfig.cheapModel ?? "未配置";
       const configPath = getPlanModelConfigPath(ctx.cwd);
       ctx.ui.notify(
-        `计划模型配置\n\n- 规划(smart): ${smart}\n- 执行(cheap): ${cheap}\n- 当前模型: ${current}\n- 配置文件: ${configPath}\n\n用法:\n- /plan model smart provider/model\n- /plan model cheap provider/model\n- /plan model clear smart|cheap`,
+        `计划模型配置\n\n- 规划(smart): ${smart}\n- 执行(cheap): ${cheap}\n- 当前模型: ${current}\n- 配置文件: ${configPath}\n\n用法:\n- /plan model smart     ← 显示可用模型列表\n- /plan model cheap    ← 显示可用模型列表\n- /plan model smart provider/model   ← 手动输入\n- /plan model cheap provider/model   ← 手动输入\n- /plan model clear smart|cheap`,
         "info",
       );
       return;
@@ -444,8 +444,52 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       }
     }
 
+    // 列出可用模型并让用户选择
+    if (!modelRefText && target) {
+      const slotLabel = target === "smart" ? "规划" : "执行";
+      const availableModels = ctx.modelRegistry.getAvailable();
+
+      if (availableModels.length === 0) {
+        ctx.ui.notify("当前无可用模型（请先配置 API Key）", "warning");
+        return;
+      }
+
+      // 按 provider 分组显示
+      const modelOptions: string[] = [];
+      const modelMap = new Map<string, string>(); // displayText -> ref
+
+      for (const m of availableModels) {
+        const ref = `${m.provider}/${m.id}`;
+        const currentMark = getCurrentModelRef(ctx) === ref ? " ←当前" : "";
+        const display = `${m.provider}/${m.id}${currentMark}`;
+        modelOptions.push(display);
+        modelMap.set(display, ref);
+      }
+
+      // 添加取消选项
+      modelOptions.push("取消");
+
+      const choice = await ctx.ui.select(
+        `选择${slotLabel}模型（${target}）：`,
+        modelOptions,
+      );
+
+      if (!choice || choice === "取消") {
+        ctx.ui.notify("已取消选择。", "info");
+        return;
+      }
+
+      const selectedRef = modelMap.get(choice);
+      if (!selectedRef) {
+        ctx.ui.notify("选择无效。", "error");
+        return;
+      }
+
+      modelRefText = selectedRef;
+    }
+
     if (!target || !modelRefText) {
-      ctx.ui.notify("用法: /plan model smart provider/model 或 /plan model cheap provider/model", "warning");
+      ctx.ui.notify("用法: /plan model smart 或 /plan model cheap（显示模型列表）", "warning");
       return;
     }
 
@@ -572,7 +616,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     updateStatus(ctx);
     persistState();
     ctx.ui.notify(
-      "[计划·探索] 已启用只读探索\n\n可用: read, bash(只读), grep, find, ls\n禁用: edit, write\n\n流程: 探索 → 审阅 → 构建\n命令: /plan 切换 | /plan resume 恢复计划 | /plan model 配置模型 | /build 批准构建 | /todos 进度 | /plans 文档",
+      "[计划·探索] 已启用只读探索\n\n可用: read, bash(只读), grep, find, ls\n禁用: edit, write\n\n流程: 探索 → 审阅 → 构建\n命令: /plan 切换 | /plan resume 恢复计划 | /plan model 配置模型（自动列出可用模型） | /build 批准构建 | /todos 进度 | /plans 文档",
       "info",
     );
   }
