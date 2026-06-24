@@ -6,7 +6,7 @@
  * - 澄清问题、迭代完善、Explore → Plan → Build（Cursor）
  * - 简洁阶段切换、计划落盘（OpenCode）
  *
- * 命令：/plan /build /todos /plans
+ * 命令：/plan /plan resume /plan model ... /build /todos /plans
  * 快捷键：Ctrl+Alt+L 切换计划模式
  */
 
@@ -40,11 +40,15 @@ import {
   generatePlanMarkdown,
   parseAmbiguousSteps,
   buildResolvedText,
+  extractTodoItemsFromSavedMarkdown,
 } from "./utils.ts";
 
 const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls"] as const;
-const BUILD_TOOLS = [...READONLY_TOOLS, "edit", "write"];
-const NORMAL_TOOLS = BUILD_TOOLS;
+const BUILD_TOOLS = [...READONLY_TOOLS, "edit", "write"] as const;
+const MANAGED_TOOL_SET = new Set<string>([...BUILD_TOOLS]);
+const READONLY_DISABLED_TOOL_SET = new Set<string>(["edit", "write"]);
+const MAX_WIDGET_ITEMS = 8;
+const PLAN_MODEL_CONFIG_FILE = "model-config.json";
 
 const PLAN_CONTEXT_MARKERS = [
   "[计划模式",
@@ -53,11 +57,25 @@ const PLAN_CONTEXT_MARKERS = [
   "agent-plan-context",
 ];
 
+interface PlanModelConfig {
+  smartModel?: string;
+  cheapModel?: string;
+}
+
 interface PersistedState {
   phase: PlanPhase;
   todos: TodoItem[];
   structured: StructuredPlan | null;
   planCreatedAt?: string;
+  toolsBeforePlanMode?: string[];
+  modelBeforePlanMode?: string;
+  modelSnapshotCaptured?: boolean;
+}
+
+interface ParsedModelRef {
+  provider: string;
+  modelId: string;
+  ref: string;
 }
 
 function isAssistantMessage(m: AgentMessage): m is AssistantMessage {
@@ -97,14 +115,73 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     default: false,
   });
 
+  let toolsBeforePlanMode: string[] | undefined;
+  let modelBeforePlanMode: string | undefined;
+  let modelSnapshotCaptured = false;
+  let modelConfig: PlanModelConfig = {};
+
   function isReadonlyPhase(): boolean {
     return phase === "explore" || phase === "review";
   }
 
-  function syncTools(): void {
-    if (phase === "build") pi.setActiveTools(BUILD_TOOLS);
-    else if (isReadonlyPhase()) pi.setActiveTools(READONLY_TOOLS);
-    else pi.setActiveTools(NORMAL_TOOLS);
+  function uniqueToolNames(toolNames: string[]): string[] {
+    return [...new Set(toolNames)];
+  }
+
+  function getReadonlyTools(baseTools: string[]): string[] {
+    return uniqueToolNames([
+      ...baseTools.filter((name) => !READONLY_DISABLED_TOOL_SET.has(name)),
+      ...READONLY_TOOLS,
+    ]);
+  }
+
+  function getBuildTools(baseTools: string[]): string[] {
+    return uniqueToolNames([
+      ...baseTools.filter((name) => !MANAGED_TOOL_SET.has(name)),
+      ...BUILD_TOOLS,
+    ]);
+  }
+
+  function ensureToolsSnapshot(): string[] {
+    if (!toolsBeforePlanMode) {
+      toolsBeforePlanMode = pi.getActiveTools();
+    }
+    return toolsBeforePlanMode;
+  }
+
+  function applyToolsForPhase(): void {
+    if (phase === "off") return;
+    const baseTools = ensureToolsSnapshot();
+    if (phase === "build") {
+      pi.setActiveTools(getBuildTools(baseTools));
+      return;
+    }
+    pi.setActiveTools(getReadonlyTools(baseTools));
+  }
+
+  function restoreToolsIfNeeded(): void {
+    if (!toolsBeforePlanMode) return;
+    pi.setActiveTools(toolsBeforePlanMode);
+    toolsBeforePlanMode = undefined;
+  }
+
+  function buildTodoWidgetLines(ctx: ExtensionContext): string[] {
+    const sorted = [...todoItems].sort((a, b) => a.step - b.step);
+    const visible = sorted.slice(0, MAX_WIDGET_ITEMS).map((item) => {
+      if (item.completed && item.skipped) {
+        return `${ctx.ui.theme.fg("warning", "⏭")} ${ctx.ui.theme.fg("muted", `${item.step}. ${item.text}`)}`;
+      }
+      if (item.completed) {
+        return `${ctx.ui.theme.fg("success", "✓")} ${ctx.ui.theme.fg("muted", `${item.step}. ${item.text}`)}`;
+      }
+      return `${ctx.ui.theme.fg("dim", "○")} ${item.step}. ${item.text}`;
+    });
+
+    if (sorted.length > visible.length) {
+      visible.push(ctx.ui.theme.fg("dim", `… 其余 ${sorted.length - visible.length} 步见 /todos`));
+    }
+
+    return [ctx.ui.theme.fg("accent", "计划执行进度"), ...visible];
   }
 
   function updateStatus(ctx: ExtensionContext): void {
@@ -116,14 +193,21 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
         "agent-plan",
         ctx.ui.theme.fg("accent", `[构建] ${progress} ${completed}/${total}`),
       );
-    } else if (phase !== "off") {
+      ctx.ui.setWidget("agent-plan-todos", buildTodoWidgetLines(ctx));
+      return;
+    }
+
+    ctx.ui.setWidget("agent-plan-todos", undefined);
+
+    if (phase !== "off") {
       ctx.ui.setStatus(
         "agent-plan",
         ctx.ui.theme.fg("warning", `[计划·${PHASE_LABELS[phase]}]`),
       );
-    } else {
-      ctx.ui.setStatus("agent-plan", undefined);
+      return;
     }
+
+    ctx.ui.setStatus("agent-plan", undefined);
   }
 
   function persistState(): void {
@@ -132,6 +216,9 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       todos: todoItems,
       structured: structuredPlan,
       planCreatedAt,
+      toolsBeforePlanMode,
+      modelBeforePlanMode,
+      modelSnapshotCaptured,
     } satisfies PersistedState);
   }
 
@@ -180,41 +267,330 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       .sort();
   }
 
+  function getPlanModelConfigPath(cwd: string): string {
+    return path.join(cwd, ".plans", PLAN_MODEL_CONFIG_FILE);
+  }
+
+  function loadPlanModelConfig(cwd: string): PlanModelConfig {
+    const configPath = getPlanModelConfigPath(cwd);
+    if (!fs.existsSync(configPath)) return {};
+
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as PlanModelConfig;
+      return {
+        smartModel: parsed.smartModel?.trim() || undefined,
+        cheapModel: parsed.cheapModel?.trim() || undefined,
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  function savePlanModelConfig(cwd: string, config: PlanModelConfig): boolean {
+    const configPath = getPlanModelConfigPath(cwd);
+    const plansDir = getPlansDir(cwd);
+    if (!fs.existsSync(plansDir)) fs.mkdirSync(plansDir, { recursive: true });
+
+    const nextConfig: PlanModelConfig = {
+      smartModel: config.smartModel?.trim() || undefined,
+      cheapModel: config.cheapModel?.trim() || undefined,
+    };
+
+    try {
+      fs.writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function parseModelRef(rawRef: string): ParsedModelRef | undefined {
+    const normalized = rawRef.trim().replace(/^@/, "");
+    if (!normalized) return undefined;
+
+    const slashIndex = normalized.indexOf("/");
+    if (slashIndex <= 0 || slashIndex >= normalized.length - 1) return undefined;
+
+    const provider = normalized.slice(0, slashIndex).trim();
+    const modelId = normalized.slice(slashIndex + 1).trim();
+    if (!provider || !modelId) return undefined;
+
+    return { provider, modelId, ref: `${provider}/${modelId}` };
+  }
+
+  function getCurrentModelRef(ctx: ExtensionContext): string | undefined {
+    if (!ctx.model) return undefined;
+    return `${ctx.model.provider}/${ctx.model.id}`;
+  }
+
+  function ensureModelSnapshot(ctx: ExtensionContext): void {
+    if (modelSnapshotCaptured) return;
+    modelBeforePlanMode = getCurrentModelRef(ctx);
+    modelSnapshotCaptured = true;
+  }
+
+  function getPhaseTargetModelRef(nextPhase: PlanPhase): string | undefined {
+    if (nextPhase === "build") return modelConfig.cheapModel;
+    if (nextPhase === "explore" || nextPhase === "review") return modelConfig.smartModel;
+    return undefined;
+  }
+
+  async function applyModelForPhase(
+    ctx: ExtensionContext,
+    nextPhase: PlanPhase,
+    options?: { notifyOnSuccess?: boolean },
+  ): Promise<void> {
+    const targetRef = getPhaseTargetModelRef(nextPhase);
+    if (!targetRef) return;
+
+    const parsed = parseModelRef(targetRef);
+    if (!parsed) {
+      ctx.ui.notify(`[计划] 模型配置格式错误: ${targetRef}（应为 provider/model）`, "warning");
+      return;
+    }
+
+    if (getCurrentModelRef(ctx) === parsed.ref) return;
+
+    const targetModel = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
+    if (!targetModel) {
+      ctx.ui.notify(`[计划] 未找到模型: ${parsed.ref}，请重新配置 /plan model`, "warning");
+      return;
+    }
+
+    const switched = await pi.setModel(targetModel);
+    if (!switched) {
+      ctx.ui.notify(`[计划] 无法切换到模型 ${parsed.ref}（可能缺少 API Key）`, "warning");
+      return;
+    }
+
+    if (options?.notifyOnSuccess) {
+      const phaseLabel = nextPhase === "build" ? "执行" : "规划";
+      ctx.ui.notify(`[计划] 已切换${phaseLabel}模型: ${parsed.ref}`, "info");
+    }
+  }
+
+  async function restoreModelIfNeeded(ctx: ExtensionContext): Promise<void> {
+    if (!modelSnapshotCaptured) return;
+
+    const previousRef = modelBeforePlanMode;
+    modelBeforePlanMode = undefined;
+    modelSnapshotCaptured = false;
+
+    if (!previousRef) return;
+    if (getCurrentModelRef(ctx) === previousRef) return;
+
+    const parsed = parseModelRef(previousRef);
+    if (!parsed) return;
+
+    const previousModel = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
+    if (!previousModel) {
+      ctx.ui.notify(`[计划] 无法恢复之前的模型 ${previousRef}（模型已不存在）`, "warning");
+      return;
+    }
+
+    const switched = await pi.setModel(previousModel);
+    if (!switched) {
+      ctx.ui.notify(`[计划] 无法恢复之前的模型 ${previousRef}（可能缺少 API Key）`, "warning");
+    }
+  }
+
+  async function handlePlanModelCommand(rawArgs: string, ctx: ExtensionContext): Promise<void> {
+    const args = rawArgs.trim();
+    if (!args || args === "show") {
+      const current = getCurrentModelRef(ctx) ?? "未选择";
+      const smart = modelConfig.smartModel ?? "未配置";
+      const cheap = modelConfig.cheapModel ?? "未配置";
+      const configPath = getPlanModelConfigPath(ctx.cwd);
+      ctx.ui.notify(
+        `计划模型配置\n\n- 规划(smart): ${smart}\n- 执行(cheap): ${cheap}\n- 当前模型: ${current}\n- 配置文件: ${configPath}\n\n用法:\n- /plan model smart provider/model\n- /plan model cheap provider/model\n- /plan model clear smart|cheap`,
+        "info",
+      );
+      return;
+    }
+
+    const tokens = args.split(/\s+/).filter(Boolean);
+    const command = tokens[0]?.toLowerCase();
+
+    if (command === "clear") {
+      const target = tokens[1]?.toLowerCase();
+      if (target !== "smart" && target !== "cheap") {
+        ctx.ui.notify("用法: /plan model clear smart|cheap", "warning");
+        return;
+      }
+
+      if (target === "smart") delete modelConfig.smartModel;
+      else delete modelConfig.cheapModel;
+
+      if (!savePlanModelConfig(ctx.cwd, modelConfig)) {
+        ctx.ui.notify("保存计划模型配置失败。", "error");
+        return;
+      }
+
+      ctx.ui.notify(`[计划] 已清除 ${target} 模型配置。`, "info");
+      return;
+    }
+
+    let target: "smart" | "cheap" | undefined;
+    let modelRefText = "";
+
+    if (command === "smart" || command === "cheap") {
+      target = command;
+      modelRefText = tokens.slice(1).join(" ");
+    } else if (command === "set") {
+      const slot = tokens[1]?.toLowerCase();
+      if (slot === "smart" || slot === "cheap") {
+        target = slot;
+        modelRefText = tokens.slice(2).join(" ");
+      }
+    }
+
+    if (!target || !modelRefText) {
+      ctx.ui.notify("用法: /plan model smart provider/model 或 /plan model cheap provider/model", "warning");
+      return;
+    }
+
+    const parsed = parseModelRef(modelRefText);
+    if (!parsed) {
+      ctx.ui.notify("模型格式错误，应为 provider/model。", "warning");
+      return;
+    }
+
+    const model = ctx.modelRegistry.find(parsed.provider, parsed.modelId);
+    if (!model) {
+      ctx.ui.notify(`未找到模型: ${parsed.ref}`, "warning");
+      return;
+    }
+
+    if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
+      ctx.ui.notify(`已保存 ${parsed.ref}，但当前尚未配置可用认证。`, "warning");
+    }
+
+    if (target === "smart") modelConfig.smartModel = parsed.ref;
+    else modelConfig.cheapModel = parsed.ref;
+
+    if (!savePlanModelConfig(ctx.cwd, modelConfig)) {
+      ctx.ui.notify("保存计划模型配置失败。", "error");
+      return;
+    }
+
+    ctx.ui.notify(`[计划] 已设置 ${target} 模型为 ${parsed.ref}`, "info");
+
+    const shouldApplyImmediately =
+      (target === "smart" && (phase === "explore" || phase === "review")) ||
+      (target === "cheap" && phase === "build");
+
+    if (shouldApplyImmediately) {
+      await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
+      persistState();
+    }
+  }
+
+  function hydratePlanFromMarkdown(markdown: string): boolean {
+    const restoredTodos = extractTodoItemsFromSavedMarkdown(markdown);
+    if (restoredTodos.length === 0) return false;
+
+    const parsed = extractStructuredPlan(markdown);
+    todoItems = restoredTodos;
+    structuredPlan = {
+      ...parsed,
+      steps: [...restoredTodos],
+      rawMarkdown: markdown.trim(),
+    };
+    return true;
+  }
+
+  async function resumeLatestPlan(ctx: ExtensionContext): Promise<void> {
+    const latestPath = path.join(ctx.cwd, ".plans", "PLAN.md");
+    if (!fs.existsSync(latestPath)) {
+      ctx.ui.notify("未找到 .plans/PLAN.md，请先生成或保存计划。", "warning");
+      return;
+    }
+
+    let markdown = "";
+    try {
+      markdown = fs.readFileSync(latestPath, "utf-8");
+    } catch (err) {
+      ctx.ui.notify(`读取计划失败: ${err}`, "error");
+      return;
+    }
+
+    if (!hydratePlanFromMarkdown(markdown)) {
+      ctx.ui.notify("无法从 PLAN.md 解析步骤（请确认文件包含 ## 步骤 清单）。", "warning");
+      return;
+    }
+
+    ensureToolsSnapshot();
+    ensureModelSnapshot(ctx);
+    const completed = todoItems.filter((t) => t.completed).length;
+    const total = todoItems.length;
+    const next = getNextPendingItem(todoItems);
+
+    if (!next) {
+      phase = "review";
+      applyToolsForPhase();
+      await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
+      updateStatus(ctx);
+      persistState();
+      ctx.ui.notify(`计划已恢复（${completed}/${total}），所有步骤均已完成。`, "info");
+      return;
+    }
+
+    phase = "build";
+    applyToolsForPhase();
+    await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
+    updateStatus(ctx);
+    persistState();
+    savePlanToMarkdown(ctx);
+
+    pi.sendMessage(
+      {
+        customType: "agent-plan-build",
+        content: `已从 .plans/PLAN.md 恢复计划（${completed}/${total}）。\n请从第 ${next.step} 步继续：${next.text}`,
+        display: true,
+      },
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+  }
+
   function resetPlan(): void {
     phase = "off";
     todoItems = [];
     structuredPlan = emptyStructured();
     planCreatedAt = "";
-    syncTools();
+    restoreToolsIfNeeded();
   }
 
-  function enterExplore(ctx: ExtensionContext): void {
+  async function enterExplore(ctx: ExtensionContext): Promise<void> {
+    ensureToolsSnapshot();
+    ensureModelSnapshot(ctx);
     phase = "explore";
     todoItems = [];
     structuredPlan = emptyStructured();
     planCreatedAt = "";
-    syncTools();
+    applyToolsForPhase();
+    await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
     updateStatus(ctx);
     persistState();
     ctx.ui.notify(
-      "[计划·探索] 已启用只读探索\n\n可用: read, bash(只读), grep, find, ls\n禁用: edit, write\n\n流程: 探索 → 审阅 → 构建\n命令: /plan 切换 | /build 批准构建 | /todos 进度 | /plans 文档",
+      "[计划·探索] 已启用只读探索\n\n可用: read, bash(只读), grep, find, ls\n禁用: edit, write\n\n流程: 探索 → 审阅 → 构建\n命令: /plan 切换 | /plan resume 恢复计划 | /plan model 配置模型 | /build 批准构建 | /todos 进度 | /plans 文档",
       "info",
     );
   }
 
-  function exitPlanMode(ctx: ExtensionContext, message?: string): void {
+  async function exitPlanMode(ctx: ExtensionContext, message?: string): Promise<void> {
     resetPlan();
+    await restoreModelIfNeeded(ctx);
     updateStatus(ctx);
     persistState();
     if (message) ctx.ui.notify(message, "info");
   }
 
-  function togglePlanMode(ctx: ExtensionContext): void {
+  async function togglePlanMode(ctx: ExtensionContext): Promise<void> {
     if (phase === "off") {
-      enterExplore(ctx);
+      await enterExplore(ctx);
       return;
     }
-    exitPlanMode(ctx, "[计划] 已退出，完整工具访问已恢复。");
+    await exitPlanMode(ctx, "[计划] 已退出，完整工具访问已恢复。");
   }
 
   async function resolveAmbiguities(ambiguous: AmbiguousStep[], ctx: ExtensionContext): Promise<void> {
@@ -268,8 +644,11 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       return false;
     }
 
+    ensureToolsSnapshot();
+    ensureModelSnapshot(ctx);
     phase = "build";
-    syncTools();
+    applyToolsForPhase();
+    await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
     updateStatus(ctx);
     persistState();
     savePlanToMarkdown(ctx);
@@ -279,18 +658,24 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       ? `计划已批准。请从第 ${next.step} 步开始：${next.text}`
       : "计划已批准，请开始执行。";
 
-    pi.sendMessage({ customType: "agent-plan-build", content: msg, display: true }, { triggerTurn: true });
+    pi.sendMessage(
+      { customType: "agent-plan-build", content: msg, display: true },
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
     return true;
   }
 
   async function handleReview(ctx: ExtensionContext): Promise<void> {
+    ensureToolsSnapshot();
+    ensureModelSnapshot(ctx);
     phase = "review";
+    applyToolsForPhase();
+    await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
     updateStatus(ctx);
     persistState();
     savePlanToMarkdown(ctx);
 
     const summary = formatStructuredSummary(structuredPlan);
-    const plansDir = getPlansDir(ctx.cwd);
     const fileHint = `\n\n📄 已保存: .plans/PLAN.md 及 .plans/plan-${currentSessionId}.md`;
 
     pi.sendMessage(
@@ -313,12 +698,15 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       await startBuild(ctx);
     } else if (choice?.startsWith("✏️")) {
       phase = "explore";
+      applyToolsForPhase();
+      await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
       updateStatus(ctx);
       persistState();
       const refinement = await ctx.ui.editor("请说明需要调整的内容：", "");
       if (refinement?.trim()) {
         pi.sendUserMessage(
           `请根据以下反馈修订计划（保持结构化格式，仍为只读探索）：\n\n${refinement.trim()}`,
+          { deliverAs: "followUp" },
         );
       }
     } else if (choice?.startsWith("💾")) {
@@ -326,7 +714,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       ctx.ui.notify("计划已保存。输入 /build 可随时开始构建，/plan 退出计划模式。", "info");
       persistState();
     } else {
-      exitPlanMode(ctx, "计划已取消。");
+      await exitPlanMode(ctx, "计划已取消。");
     }
   }
 
@@ -342,7 +730,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       );
       const answers = await ctx.ui.editor("请回答澄清问题（回答后 Agent 将继续制定计划）：", "");
       if (answers?.trim()) {
-        pi.sendUserMessage(answers.trim());
+        pi.sendUserMessage(answers.trim(), { deliverAs: "followUp" });
       }
       return;
     }
@@ -365,8 +753,29 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
   // ==================== 命令 ====================
 
   pi.registerCommand("plan", {
-    description: "切换计划模式（探索 → 审阅 → 构建）",
-    handler: async (_args, ctx) => togglePlanMode(ctx),
+    description: "切换计划模式；支持 /plan resume 与 /plan model ...",
+    handler: async (args, ctx) => {
+      const raw = (args ?? "").trim();
+      if (!raw) {
+        await togglePlanMode(ctx);
+        return;
+      }
+
+      const [subcommand, ...rest] = raw.split(/\s+/);
+      const normalized = subcommand.toLowerCase();
+
+      if (normalized === "resume") {
+        await resumeLatestPlan(ctx);
+        return;
+      }
+
+      if (normalized === "model") {
+        await handlePlanModelCommand(rest.join(" "), ctx);
+        return;
+      }
+
+      ctx.ui.notify("未知参数。用法: /plan | /plan resume | /plan model ...", "warning");
+    },
   });
 
   pi.registerCommand("build", {
@@ -433,7 +842,9 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
 
   pi.registerShortcut(Key.ctrlAlt("l"), {
     description: "切换计划模式",
-    handler: async (ctx) => togglePlanMode(ctx),
+    handler: async (ctx) => {
+      await togglePlanMode(ctx);
+    },
   });
 
   // ==================== 事件 ====================
@@ -547,7 +958,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
         );
 
         savePlanToMarkdown(ctx);
-        exitPlanMode(ctx);
+        await exitPlanMode(ctx);
       }
       return;
     }
@@ -566,6 +977,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     currentSessionId = ctx.sessionManager.getSessionId();
+    modelConfig = loadPlanModelConfig(ctx.cwd);
 
     if (pi.getFlag("plan") === true) phase = "explore";
 
@@ -579,6 +991,9 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       todoItems = saved.data.todos ?? [];
       structuredPlan = saved.data.structured ?? emptyStructured();
       planCreatedAt = saved.data.planCreatedAt ?? "";
+      toolsBeforePlanMode = saved.data.toolsBeforePlanMode;
+      modelBeforePlanMode = saved.data.modelBeforePlanMode;
+      modelSnapshotCaptured = saved.data.modelSnapshotCaptured ?? false;
       if (todoItems.length > 0) structuredPlan.steps = todoItems;
     }
 
@@ -619,7 +1034,16 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       structuredPlan.steps = [...todoItems];
     }
 
-    syncTools();
+    if (phase === "off") {
+      restoreToolsIfNeeded();
+      await restoreModelIfNeeded(ctx);
+    } else {
+      ensureToolsSnapshot();
+      ensureModelSnapshot(ctx);
+      applyToolsForPhase();
+      await applyModelForPhase(ctx, phase);
+    }
+
     updateStatus(ctx);
   });
 }

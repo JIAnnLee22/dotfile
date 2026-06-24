@@ -318,6 +318,46 @@ export function extractTodoItems(message: string): TodoItem[] {
   return items.sort((a, b) => a.step - b.step);
 }
 
+export function extractTodoItemsFromSavedMarkdown(message: string): TodoItem[] {
+  const section = extractSection(message, ["步骤", "Steps"]);
+  if (!section) return [];
+
+  const items: TodoItem[] = [];
+  const usedSteps = new Set<number>();
+  const checklistPattern = /^\s*-\s*\[(x|X| )\]\s+\*\*(\d+)\.\*\*\s+(.+)$/;
+
+  for (const line of section.split(/\r?\n/)) {
+    const match = line.match(checklistPattern);
+    if (!match) continue;
+
+    const step = Number(match[2]);
+    if (!Number.isFinite(step) || step <= 0 || usedSteps.has(step)) continue;
+
+    const done = match[1].toLowerCase() === "x";
+    const skipped = /⏭|\(已跳过\)/u.test(match[3]);
+    const text = cleanStepText(
+      match[3]
+        .replace(/^✅\s*/u, "")
+        .replace(/^⏭️?\s*/u, "")
+        .replace(/\(已跳过\)/g, "")
+        .replace(/~~/g, "")
+        .trim(),
+    );
+
+    if (text.length <= 3) continue;
+
+    usedSteps.add(step);
+    items.push({
+      step,
+      text,
+      completed: done || skipped,
+      skipped: skipped || undefined,
+    });
+  }
+
+  return items.sort((a, b) => a.step - b.step);
+}
+
 export function extractStructuredPlan(message: string): StructuredPlan {
   const overview = extractSection(message, ["概述", "Overview", "概览"]);
   const approach = extractSection(message, ["方案", "Approach", "实现方案"]);

@@ -10,9 +10,9 @@
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.79.6",
-  "defaultProvider": "xiaomi",
-  "defaultModel": "mimo-v2.5-pro",
+  "lastChangelogVersion": "0.80.2",
+  "defaultProvider": "opencode",
+  "defaultModel": "gpt-5.3-codex",
   "defaultThinkingLevel": "high",
   "theme": "dark"
 }

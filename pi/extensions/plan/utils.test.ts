@@ -8,6 +8,7 @@ import {
   hasUnsafeRedirect,
   isSafeCommand,
   extractTodoItems,
+  extractTodoItemsFromSavedMarkdown,
   extractClarifyingQuestions,
   extractStructuredPlan,
   hasActionablePlan,
@@ -70,6 +71,26 @@ describe("extractTodoItems", () => {
     assert.equal(items.length, 2);
     assert.equal(items[0].step, 1);
     assert.equal(items[1].step, 5);
+  });
+});
+
+describe("extractTodoItemsFromSavedMarkdown", () => {
+  it("restores completion and skipped state from saved plan markdown", () => {
+    const md = `## 步骤\n- [x] **1.** ✅ 完成接口重构\n- [x] **2.** ⏭️ ~~跳过旧迁移脚本~~ (已跳过)\n- [ ] **3.** 新增端到端测试`;
+    const items = extractTodoItemsFromSavedMarkdown(md);
+
+    assert.equal(items.length, 3);
+    assert.equal(items[0].step, 1);
+    assert.equal(items[0].completed, true);
+    assert.equal(items[0].skipped, undefined);
+
+    assert.equal(items[1].step, 2);
+    assert.equal(items[1].completed, true);
+    assert.equal(items[1].skipped, true);
+    assert.match(items[1].text, /跳过旧迁移脚本/);
+
+    assert.equal(items[2].step, 3);
+    assert.equal(items[2].completed, false);
   });
 });
 

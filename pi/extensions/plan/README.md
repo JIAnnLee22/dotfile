@@ -4,6 +4,8 @@
 
 ## 融合要点
 
+> 本版本额外参考了官方高使用率 `examples/extensions/plan-mode` 的交互习惯，并做了工作流对齐。
+
 | 来源 | 吸收的能力 |
 |------|-----------|
 | **Claude Code** | 只读探索、结构化计划、用户批准后才构建 |
@@ -18,15 +20,20 @@
 
 | 阶段 | 工具 | 说明 |
 |------|------|------|
-| 探索 | 只读 | 分析代码、输出结构化计划或澄清问题 |
-| 审阅 | 只读 | 用户确认、修订或保存计划 |
-| 构建 | 读写 | 按步骤执行，跟踪 `[DONE:n]` / `[SKIP:n]` |
+| 探索 | 只读 + 保留自定义工具 | 分析代码、输出结构化计划或澄清问题 |
+| 审阅 | 只读 + 保留自定义工具 | 用户确认、修订或保存计划 |
+| 构建 | 读写 + 保留自定义工具 | 按步骤执行，跟踪 `[DONE:n]` / `[SKIP:n]` |
 
 ## 命令
 
 | 命令 | 功能 |
 |------|------|
 | `/plan` | 切换计划模式（进入探索 / 退出） |
+| `/plan resume` | 从 `.plans/PLAN.md` 恢复计划并继续执行 |
+| `/plan model` | 查看计划模型配置（smart/cheap） |
+| `/plan model smart provider/model` | 设置创建计划时使用的智能模型 |
+| `/plan model cheap provider/model` | 设置执行计划时使用的经济模型 |
+| `/plan model clear smart|cheap` | 清除对应模型配置 |
 | `/build` | 批准计划并开始构建 |
 | `/todos` | 显示当前进度 |
 | `/plans` | 查看已保存计划文档 |
@@ -89,6 +96,31 @@ Plan:
 - **会话归档**: `.plans/plan-{sessionId}.md`
 
 保存时机：审阅、步骤完成、构建完成。
+
+## 工作流增强
+
+- 进入计划模式会记录当前工具集，退出时自动恢复，避免影响你已有的自定义工作流。
+- 构建阶段会在编辑器上方显示执行步骤小组件（最多 8 条，完整列表用 `/todos`）。
+- 审阅阶段触发的“继续完善/批准构建”消息使用 follow-up 队列，减少并发时序问题。
+- 可为不同阶段配置不同模型：创建计划用 smart，执行计划用 cheap。
+
+## 阶段模型配置（smart / cheap）
+
+计划模式支持按阶段自动切换模型：
+
+- `explore/review`：优先切到 `smartModel`
+- `build`：优先切到 `cheapModel`
+- 退出计划模式：自动尝试恢复进入计划模式前的模型
+
+配置文件位置：`.plans/model-config.json`
+
+示例：
+
+```bash
+/plan model smart anthropic/claude-opus-4-5
+/plan model cheap openai/gpt-4.1-mini
+/plan model
+```
 
 ## 工作流示例
 
