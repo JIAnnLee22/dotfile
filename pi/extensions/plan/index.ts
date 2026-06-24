@@ -11,6 +11,7 @@
  */
 
 import fs from "fs";
+import os from "os";
 import path from "path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
@@ -48,7 +49,6 @@ const BUILD_TOOLS = [...READONLY_TOOLS, "edit", "write"] as const;
 const MANAGED_TOOL_SET = new Set<string>([...BUILD_TOOLS]);
 const READONLY_DISABLED_TOOL_SET = new Set<string>(["edit", "write"]);
 const MAX_WIDGET_ITEMS = 8;
-const PLAN_MODEL_CONFIG_FILE = "model-config.json";
 
 const PLAN_CONTEXT_MARKERS = [
   "[计划模式",
@@ -58,8 +58,8 @@ const PLAN_CONTEXT_MARKERS = [
 ];
 
 interface PlanModelConfig {
-  smartModel?: string;
-  cheapModel?: string;
+  planModel?: string;
+  executionModel?: string;
 }
 
 interface PersistedState {
@@ -267,37 +267,51 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       .sort();
   }
 
-  function getPlanModelConfigPath(cwd: string): string {
-    return path.join(cwd, ".plans", PLAN_MODEL_CONFIG_FILE);
+  function getGlobalSettingsPath(): string {
+    return path.join(process.env.HOME || os.homedir(), ".config/pi/settings.json");
   }
 
-  function loadPlanModelConfig(cwd: string): PlanModelConfig {
-    const configPath = getPlanModelConfigPath(cwd);
+  function loadPlanModelConfig(): PlanModelConfig {
+    const configPath = getGlobalSettingsPath();
     if (!fs.existsSync(configPath)) return {};
 
     try {
-      const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as PlanModelConfig;
+      const parsed = JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
       return {
-        smartModel: parsed.smartModel?.trim() || undefined,
-        cheapModel: parsed.cheapModel?.trim() || undefined,
+        planModel: typeof parsed.planModel === "string" ? parsed.planModel.trim() : undefined,
+        executionModel: typeof parsed.executionModel === "string" ? parsed.executionModel.trim() : undefined,
       };
     } catch {
       return {};
     }
   }
 
-  function savePlanModelConfig(cwd: string, config: PlanModelConfig): boolean {
-    const configPath = getPlanModelConfigPath(cwd);
-    const plansDir = getPlansDir(cwd);
-    if (!fs.existsSync(plansDir)) fs.mkdirSync(plansDir, { recursive: true });
+  function savePlanModelConfig(config: PlanModelConfig): boolean {
+    const configPath = getGlobalSettingsPath();
 
-    const nextConfig: PlanModelConfig = {
-      smartModel: config.smartModel?.trim() || undefined,
-      cheapModel: config.cheapModel?.trim() || undefined,
-    };
+    let settings: Record<string, unknown> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        settings = JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+      } catch {
+        // 如果读取失败，使用空对象
+      }
+    }
+
+    if (config.planModel?.trim()) {
+      settings.planModel = config.planModel.trim();
+    } else {
+      delete settings.planModel;
+    }
+
+    if (config.executionModel?.trim()) {
+      settings.executionModel = config.executionModel.trim();
+    } else {
+      delete settings.executionModel;
+    }
 
     try {
-      fs.writeFileSync(configPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf-8");
+      fs.writeFileSync(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
       return true;
     } catch {
       return false;
@@ -330,8 +344,8 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
   }
 
   function getPhaseTargetModelRef(nextPhase: PlanPhase): string | undefined {
-    if (nextPhase === "build") return modelConfig.cheapModel;
-    if (nextPhase === "explore" || nextPhase === "review") return modelConfig.smartModel;
+    if (nextPhase === "build") return modelConfig.executionModel;
+    if (nextPhase === "explore" || nextPhase === "review") return modelConfig.planModel;
     return undefined;
   }
 
@@ -398,11 +412,11 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     const args = rawArgs.trim();
     if (!args || args === "show") {
       const current = getCurrentModelRef(ctx) ?? "未选择";
-      const smart = modelConfig.smartModel ?? "未配置";
-      const cheap = modelConfig.cheapModel ?? "未配置";
-      const configPath = getPlanModelConfigPath(ctx.cwd);
+      const plan = modelConfig.planModel ?? "未配置";
+      const execution = modelConfig.executionModel ?? "未配置";
+      const configPath = getGlobalSettingsPath();
       ctx.ui.notify(
-        `计划模型配置\n\n- 规划(smart): ${smart}\n- 执行(cheap): ${cheap}\n- 当前模型: ${current}\n- 配置文件: ${configPath}\n\n用法:\n- /plan model smart     ← 显示可用模型列表\n- /plan model cheap    ← 显示可用模型列表\n- /plan model smart provider/model   ← 手动输入\n- /plan model cheap provider/model   ← 手动输入\n- /plan model clear smart|cheap`,
+        `计划模型配置\n\n- 计划模型: ${plan}\n- 执行模型: ${execution}\n- 当前模型: ${current}\n- 全局配置: ${configPath}\n\n用法:\n- /plan model 计划     ← 显示可用模型列表\n- /plan model 执行     ← 显示可用模型列表\n- /plan model 计划 provider/model   ← 手动输入\n- /plan model 执行 provider/model   ← 手动输入\n- /plan model clear 计划|执行`,
         "info",
       );
       return;
@@ -413,15 +427,15 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
 
     if (command === "clear") {
       const target = tokens[1]?.toLowerCase();
-      if (target !== "smart" && target !== "cheap") {
-        ctx.ui.notify("用法: /plan model clear smart|cheap", "warning");
+      if (target !== "计划" && target !== "执行") {
+        ctx.ui.notify("用法: /plan model clear 计划|执行", "warning");
         return;
       }
 
-      if (target === "smart") delete modelConfig.smartModel;
-      else delete modelConfig.cheapModel;
+      if (target === "计划") delete modelConfig.planModel;
+      else delete modelConfig.executionModel;
 
-      if (!savePlanModelConfig(ctx.cwd, modelConfig)) {
+      if (!savePlanModelConfig(modelConfig)) {
         ctx.ui.notify("保存计划模型配置失败。", "error");
         return;
       }
@@ -430,15 +444,15 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    let target: "smart" | "cheap" | undefined;
+    let target: "计划" | "执行" | undefined;
     let modelRefText = "";
 
-    if (command === "smart" || command === "cheap") {
+    if (command === "计划" || command === "执行") {
       target = command;
       modelRefText = tokens.slice(1).join(" ");
     } else if (command === "set") {
       const slot = tokens[1]?.toLowerCase();
-      if (slot === "smart" || slot === "cheap") {
+      if (slot === "计划" || slot === "执行") {
         target = slot;
         modelRefText = tokens.slice(2).join(" ");
       }
@@ -446,7 +460,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
 
     // 列出可用模型并让用户选择
     if (!modelRefText && target) {
-      const slotLabel = target === "smart" ? "规划" : "执行";
+      const slotLabel = target === "计划" ? "计划" : "执行";
       const availableModels = ctx.modelRegistry.getAvailable();
 
       if (availableModels.length === 0) {
@@ -489,7 +503,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     }
 
     if (!target || !modelRefText) {
-      ctx.ui.notify("用法: /plan model smart 或 /plan model cheap（显示模型列表）", "warning");
+      ctx.ui.notify("用法: /plan model 计划 或 /plan model 执行（显示模型列表）", "warning");
       return;
     }
 
@@ -509,10 +523,10 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       ctx.ui.notify(`已保存 ${parsed.ref}，但当前尚未配置可用认证。`, "warning");
     }
 
-    if (target === "smart") modelConfig.smartModel = parsed.ref;
-    else modelConfig.cheapModel = parsed.ref;
+    if (target === "计划") modelConfig.planModel = parsed.ref;
+    else modelConfig.executionModel = parsed.ref;
 
-    if (!savePlanModelConfig(ctx.cwd, modelConfig)) {
+    if (!savePlanModelConfig(modelConfig)) {
       ctx.ui.notify("保存计划模型配置失败。", "error");
       return;
     }
@@ -520,8 +534,8 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     ctx.ui.notify(`[计划] 已设置 ${target} 模型为 ${parsed.ref}`, "info");
 
     const shouldApplyImmediately =
-      (target === "smart" && (phase === "explore" || phase === "review")) ||
-      (target === "cheap" && phase === "build");
+      (target === "计划" && (phase === "explore" || phase === "review")) ||
+      (target === "执行" && phase === "build");
 
     if (shouldApplyImmediately) {
       await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });

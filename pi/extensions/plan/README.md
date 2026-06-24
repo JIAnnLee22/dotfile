@@ -102,23 +102,23 @@ Plan:
 - 进入计划模式会记录当前工具集，退出时自动恢复，避免影响你已有的自定义工作流。
 - 构建阶段会在编辑器上方显示执行步骤小组件（最多 8 条，完整列表用 `/todos`）。
 - 审阅阶段触发的“继续完善/批准构建”消息使用 follow-up 队列，减少并发时序问题。
-- 可为不同阶段配置不同模型：创建计划用 smart，执行计划用 cheap。
+- 可为不同阶段配置不同模型：创建计划用计划模型，执行计划用执行模型。
 
-## 阶段模型配置（smart / cheap）
+## 阶段模型配置（计划 / 执行）
 
 计划模式支持按阶段自动切换模型：
 
-- `explore/review`：优先切到 `smartModel`
-- `build`：优先切到 `cheapModel`
+- `explore/review`：优先切到计划模型
+- `build`：优先切到执行模型
 - 退出计划模式：自动尝试恢复进入计划模式前的模型
 
-配置文件位置：`.plans/model-config.json`
+**全局配置位置**：`~/.config/pi/settings.json`（字段：`planModel`、`executionModel`）
 
 示例：
 
 ```bash
-/plan model smart anthropic/claude-opus-4-5
-/plan model cheap openai/gpt-4.1-mini
+/plan model 计划 anthropic/claude-opus-4-5
+/plan model 执行 openai/gpt-4.1-mini
 /plan model
 ```
 

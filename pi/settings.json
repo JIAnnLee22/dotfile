@@ -14,5 +14,7 @@
   "defaultProvider": "opencode",
   "defaultModel": "minimax-m2.7",
   "defaultThinkingLevel": "high",
-  "theme": "dark"
+  "theme": "dark",
+  "planModel": "opencode/minimax-m2.7",
+  "executionModel": "deepseek/deepseek-v4-flash"
 }
