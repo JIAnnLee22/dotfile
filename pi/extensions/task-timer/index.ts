@@ -76,11 +76,33 @@ export default function taskTimerExtension(pi: ExtensionAPI): void {
   let stallTimeoutMs = 120_000;
   let stallWarningFired = false;
 
+  /** 是否从历史 session 恢复 */
+  let isResumedSession = false;
+  /** Session 的真实开始时间（用于恢复 session 时准确计时） */
+  let sessionStartTime: number | null = null;
+
   pi.registerFlag("stall-timeout", {
     description: "无进展超时秒数（默认 120）",
     type: "string",
     default: "120",
   });
+
+  /** 重置所有计时状态 */
+  function resetTimerState(): void {
+    agentStartTime = null;
+    turnStartTime = null;
+    lastTurnDuration = null;
+    lastTurnIndex = -1;
+    turnStartTimestamp = null;
+    lastActivityTime = null;
+    turnIndex = -1;
+    toolCallCount = 0;
+    isStreaming = false;
+    currentToolSummary = "";
+    stallWarningFired = false;
+    isResumedSession = false;
+    sessionStartTime = null;
+  }
 
   function clearTimers(): void {
     if (statusInterval) { clearInterval(statusInterval); statusInterval = null; }
@@ -170,13 +192,54 @@ export default function taskTimerExtension(pi: ExtensionAPI): void {
   // ==================== 事件监听 ====================
 
   // 会话初始化
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     const flag = pi.getFlag("stall-timeout");
     if (flag) {
       const n = parseInt(String(flag), 10);
       if (!isNaN(n) && n > 0) stallTimeoutMs = n * 1000;
     }
-    console.log(`[task-timer] 初始化 | 停滞超时: ${formatDuration(stallTimeoutMs)}`);
+
+    // 重置状态
+    resetTimerState();
+
+    // 判断是否为恢复的 session（不是全新启动）
+    const isResume = event.reason === "resume" || event.reason === "fork";
+    isResumedSession = isResume;
+
+    if (isResume) {
+      // 从历史消息中计算真实的 session 开始时间和 turn 索引
+      const entries = ctx.sessionManager.getEntries();
+      let maxTurnIndex = -1;
+      let firstTimestamp: number | null = null;
+
+      for (const entry of entries) {
+        // 查找 timestamp
+        if ("timestamp" in entry && typeof entry.timestamp === "number") {
+          if (firstTimestamp === null) {
+            firstTimestamp = entry.timestamp;
+          }
+        }
+        // 查找 turn 信息
+        if (entry.type === "message" && "message" in entry) {
+          const msg = entry.message as { role?: string; turnIndex?: number };
+          if (msg.turnIndex !== undefined && msg.turnIndex > maxTurnIndex) {
+            maxTurnIndex = msg.turnIndex;
+          }
+        }
+      }
+
+      if (firstTimestamp) {
+        sessionStartTime = firstTimestamp;
+        console.log(`[task-timer] 恢复 session | 开始时间: ${formatTime(new Date(firstTimestamp))}`);
+      }
+
+      if (maxTurnIndex >= 0) {
+        turnIndex = maxTurnIndex;
+        console.log(`[task-timer] 恢复 turn 索引: ${maxTurnIndex}`);
+      }
+    }
+
+    console.log(`[task-timer] 初始化 | 停滞超时: ${formatDuration(stallTimeoutMs)} | ${isResume ? "恢复会话" : "新会话"}`);
   });
 
   // before_agent_start - 用户发消息后
@@ -188,13 +251,22 @@ export default function taskTimerExtension(pi: ExtensionAPI): void {
 
   // Agent 整体开始
   pi.on("agent_start", async (_event, ctx) => {
-    agentStartTime = Date.now();
+    // 恢复 session 时使用真实开始时间，新 session 使用当前时间
+    if (isResumedSession && sessionStartTime) {
+      agentStartTime = sessionStartTime;
+    } else {
+      agentStartTime = Date.now();
+      sessionStartTime = agentStartTime;
+    }
     isStreaming = true;
-    turnIndex = 0;
+    // 恢复 session 时不重置 turnIndex（已在 session_start 中计算）
+    if (!isResumedSession) {
+      turnIndex = 0;
+    }
     toolCallCount = 0;
     startMonitoring(ctx);
     setWM(ctx, C_CYAN(`${I_PLAY} Agent 启动中...`));
-    console.log(`[task-timer] ${I_PLAY} Agent 开始 @ ${formatTime(new Date())}`);
+    console.log(`[task-timer] ${I_PLAY} Agent 开始 @ ${formatTime(new Date())} | 已运行时长: ${agentStartTime ? formatDuration(Date.now() - agentStartTime) : "--"}`);
   });
 
   // Agent 整体结束
@@ -203,24 +275,41 @@ export default function taskTimerExtension(pi: ExtensionAPI): void {
     clearTimers();
     if (agentStartTime) {
       const dur = formatDuration(Date.now() - agentStartTime);
-      console.log(`[task-timer] ${I_DONE} Agent 结束 @ ${formatTime(new Date())} | 总耗时: ${dur}`);
+      const totalTime = sessionStartTime
+        ? `总耗时: ${dur}`
+        : `运行时长: ${dur}`;
+      console.log(`[task-timer] ${I_DONE} Agent 结束 @ ${formatTime(new Date())} | ${totalTime}`);
       ctx.ui.setStatus("task-timer", ctx.ui.theme.fg("success", `${I_DONE} 完成 | ${dur}`));
       setTimeout(() => ctx.ui.setStatus("task-timer", undefined), 5000);
     }
+    // 重置计时状态（但保留 sessionStartTime 用于下一个 agent_start）
     agentStartTime = null;
+    turnStartTime = null;
     lastActivityTime = null;
+    currentToolSummary = "";
+    stallWarningFired = false;
     setWM(ctx, C_GREEN(`${I_DONE} 完成`));
+  });
+
+  // 会话关闭时清理所有状态
+  pi.on("session_shutdown", async () => {
+    clearTimers();
+    resetTimerState();
   });
 
   // Turn 开始
   pi.on("turn_start", async (event, ctx) => {
-    turnIndex = event.turnIndex;
+    // 如果是恢复的 session，保持已有的 turnIndex（避免重复递增）
+    // 只在新的 turn 时才更新
+    if (event.turnIndex > turnIndex) {
+      turnIndex = event.turnIndex;
+    }
     turnStartTime = Date.now();
     turnStartTimestamp = new Date();
     lastActivityTime = Date.now();
     stallWarningFired = false;
-    setWM(ctx, C_PURPLE(`${I_TURN} Turn ${event.turnIndex} - 思考中...`));
-    console.log(`[task-timer] ${I_TURN} Turn ${event.turnIndex} 开始 @ ${formatTime(turnStartTimestamp)}`);
+    setWM(ctx, C_PURPLE(`${I_TURN} Turn ${turnIndex} - 思考中...`));
+    console.log(`[task-timer] ${I_TURN} Turn ${turnIndex} 开始 @ ${formatTime(turnStartTimestamp)}`);
     updateStatusBar(ctx);
   });
 

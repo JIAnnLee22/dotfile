@@ -723,62 +723,124 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     return true;
   }
 
+  /**
+   * 审阅阶段的标志，用于防止在 UI 等待期间重复处理
+   */
+  let isReviewing = false;
+
   async function handleReview(ctx: ExtensionContext): Promise<void> {
-    ensureToolsSnapshot();
-    ensureModelSnapshot(ctx);
-    phase = "review";
-    applyToolsForPhase();
-    await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
-    updateStatus(ctx);
-    persistState();
-    savePlanToMarkdown(ctx);
+    // 防止重复进入
+    if (isReviewing) {
+      return;
+    }
+    isReviewing = true;
 
-    const summary = formatStructuredSummary(structuredPlan);
-    const fileHint = `\n\n📄 已保存: .plans/PLAN.md 及 .plans/plan-${currentSessionId}.md`;
+    try {
+      ensureToolsSnapshot();
+      ensureModelSnapshot(ctx);
 
-    pi.sendMessage(
-      {
-        customType: "agent-plan-review",
-        content: `**计划待审阅** (${todoItems.length} 步)\n\n${summary}${fileHint}\n\n使用 /build 批准构建，或选择下方操作。`,
-        display: true,
-      },
-      { triggerTurn: false },
-    );
-
-    const choice = await ctx.ui.select("计划审阅 — 下一步？", [
-      "✅ 批准并开始构建",
-      "✏️ 继续完善计划",
-      "💾 仅保存，暂不构建",
-      "❌ 取消计划",
-    ]);
-
-    if (choice?.startsWith("✅")) {
-      await startBuild(ctx);
-    } else if (choice?.startsWith("✏️")) {
-      phase = "explore";
+      // 先切换状态并持久化，再发送消息
+      const prevPhase = phase;
+      phase = "review";
       applyToolsForPhase();
-      await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
       updateStatus(ctx);
       persistState();
-      const refinement = await ctx.ui.editor("请说明需要调整的内容：", "");
-      if (refinement?.trim()) {
-        pi.sendUserMessage(
-          `请根据以下反馈修订计划（保持结构化格式，仍为只读探索）：\n\n${refinement.trim()}`,
-          { deliverAs: "followUp" },
-        );
+      savePlanToMarkdown(ctx);
+
+      // 发送审阅消息（使用 steering 模式，等待当前 turn 结束）
+      const summary = formatStructuredSummary(structuredPlan);
+      const fileHint = `\n\n📄 已保存: .plans/PLAN.md 及 .plans/plan-${currentSessionId}.md`;
+
+      pi.sendMessage(
+        {
+          customType: "agent-plan-review",
+          content: `**计划待审阅** (${todoItems.length} 步)\n\n${summary}${fileHint}\n\n使用 /build 批准构建，或选择下方操作。`,
+          display: true,
+        },
+        { triggerTurn: false },
+      );
+
+      await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
+
+      // 等待用户选择（使用 steering 模式，确保在 turn 结束后处理）
+      const choice = await ctx.ui.select("计划审阅 — 下一步？", [
+        "✅ 批准并开始构建",
+        "✏️ 继续完善计划",
+        "💾 仅保存，暂不构建",
+        "❌ 取消计划",
+      ]);
+
+      if (choice?.startsWith("✅")) {
+        await startBuild(ctx);
+      } else if (choice?.startsWith("✏️")) {
+        // 保存当前计划内容到临时存储，防止被覆盖
+        const savedPlan = structuredPlan;
+        const savedTodos = [...todoItems];
+
+        phase = "explore";
+        applyToolsForPhase();
+        await applyModelForPhase(ctx, phase, { notifyOnSuccess: true });
+        updateStatus(ctx);
+        persistState();
+
+        // 获取用户反馈并发送
+        const refinement = await ctx.ui.editor("请说明需要调整的内容：", "");
+        if (refinement?.trim()) {
+          // 使用 steering 模式，在当前 turn 结束后发送
+          pi.sendMessage(
+            {
+              customType: "agent-plan-refinement",
+              content: refinement.trim(),
+              display: true,
+            },
+            { triggerTurn: true, deliverAs: "steering" },
+          );
+        }
+      } else if (choice?.startsWith("💾")) {
+        // 仅保存，不需要再次 persistState（已经在上面保存了）
+        ctx.ui.notify("计划已保存。输入 /build 可随时开始构建，/plan 退出计划模式。", "info");
+      } else {
+        await exitPlanMode(ctx, "计划已取消。");
       }
-    } else if (choice?.startsWith("💾")) {
-      phase = "review";
-      ctx.ui.notify("计划已保存。输入 /build 可随时开始构建，/plan 退出计划模式。", "info");
-      persistState();
-    } else {
-      await exitPlanMode(ctx, "计划已取消。");
+    } finally {
+      isReviewing = false;
     }
   }
 
-  async function processAgentPlan(text: string, ctx: ExtensionContext): Promise<void> {
-    structuredPlan = extractStructuredPlan(text);
-    todoItems = structuredPlan.steps;
+  /**
+   * 处理 Agent 输出的计划内容
+   * @param text Agent 的响应文本
+   * @param ctx 扩展上下文
+   * @param forceUpdate 是否强制更新现有计划（用于用户编辑后的重新处理）
+   */
+  async function processAgentPlan(text: string, ctx: ExtensionContext, forceUpdate: boolean = false): Promise<void> {
+    const newPlan = extractStructuredPlan(text);
+
+    // 只有在以下情况下更新计划：
+    // 1. forceUpdate 为 true（强制更新，用于用户编辑）
+    // 2. 当前没有有效计划（explore 阶段且 todoItems 为空）
+    // 3. 新计划包含澄清问题（需要用户回答）
+    const hasExistingPlan = todoItems.length > 0 && structuredPlan.overview;
+
+    if (!forceUpdate && hasExistingPlan && newPlan.questions.length === 0 && newPlan.steps.length === 0) {
+      // 有现有计划但新响应没有内容，不覆盖
+      return;
+    }
+
+    // 如果新计划有实质性内容（包括澄清问题或步骤），则更新
+    if (newPlan.questions.length > 0 || newPlan.steps.length > 0 || newPlan.overview) {
+      // 合并而非覆盖：保留已完成步骤的状态
+      if (hasExistingPlan && !forceUpdate) {
+        // 将已完成状态转移到新计划
+        const completedSteps = new Set(todoItems.filter(t => t.completed).map(t => t.step));
+        newPlan.steps = newPlan.steps.map(item => ({
+          ...item,
+          completed: completedSteps.has(item.step),
+        }));
+      }
+      structuredPlan = newPlan;
+      todoItems = structuredPlan.steps;
+    }
 
     if (structuredPlan.questions.length > 0 && !hasActionablePlan(structuredPlan)) {
       const followUp = buildQuestionsFollowUp(structuredPlan.questions);
@@ -788,7 +850,10 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       );
       const answers = await ctx.ui.editor("请回答澄清问题（回答后 Agent 将继续制定计划）：", "");
       if (answers?.trim()) {
-        pi.sendUserMessage(answers.trim(), { deliverAs: "followUp" });
+        pi.sendMessage(
+          { customType: "agent-plan-questions-answer", content: answers.trim(), display: true },
+          { triggerTurn: true, deliverAs: "steering" },
+        );
       }
       return;
     }
@@ -997,6 +1062,12 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     }
   });
 
+  /**
+   * 用于防止在 UI 阻塞期间重复触发计划处理
+   */
+  let pendingPlanText: string | null = null;
+  let isProcessingPlan = false;
+
   pi.on("agent_end", async (event, ctx) => {
     if (phase === "build" && todoItems.length > 0) {
       if (todoItems.every((t) => t.completed || t.skipped)) {
@@ -1023,13 +1094,35 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
 
     if (phase !== "explore" || !ctx.hasUI) return;
 
+    // 防止在正在处理时重复触发
+    if (isProcessingPlan) {
+      // 记录最新的计划文本，后续处理
+      const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
+      if (lastAssistant) {
+        pendingPlanText = getTextContent(lastAssistant);
+      }
+      return;
+    }
+
     const lastAssistant = [...event.messages].reverse().find(isAssistantMessage);
     if (!lastAssistant) return;
 
     const text = getTextContent(lastAssistant);
     const plan = extractStructuredPlan(text);
     if (plan.questions.length > 0 || plan.steps.length > 0 || plan.overview) {
-      await processAgentPlan(text, ctx);
+      isProcessingPlan = true;
+      try {
+        await processAgentPlan(text, ctx);
+      } finally {
+        isProcessingPlan = false;
+        // 如果有待处理的计划文本，处理它
+        if (pendingPlanText !== null && !isReviewing) {
+          const textToProcess = pendingPlanText;
+          pendingPlanText = null;
+          // 延迟处理，避免同步问题
+          setTimeout(() => processAgentPlan(textToProcess, ctx, true), 0);
+        }
+      }
     }
   });
 
@@ -1102,6 +1195,12 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       await applyModelForPhase(ctx, phase);
     }
 
-    updateStatus(ctx);
+    // 重置状态标志
+    isReviewing = false;
+    isProcessingPlan = false;
+    pendingPlanText = null;
+
+    // 延迟更新状态，避免在 session_start 期间阻塞 UI
+    setTimeout(() => updateStatus(ctx), 100);
   });
 }
