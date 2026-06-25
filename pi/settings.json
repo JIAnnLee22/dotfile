@@ -12,7 +12,7 @@
   ],
   "lastChangelogVersion": "0.80.2",
   "defaultProvider": "opencode",
-  "defaultModel": "nemotron-3-ultra-free",
+  "defaultModel": "minimax-m2.7",
   "defaultThinkingLevel": "high",
   "theme": "dark",
   "planModel": "opencode/minimax-m2.7",

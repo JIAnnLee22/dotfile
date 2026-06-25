@@ -941,12 +941,12 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (_event, ctx) => {
     if (phase === "explore") {
       return {
         message: {
           customType: "agent-plan-context",
-          content: buildExplorePrompt(),
+          content: buildExplorePrompt(ctx.model),
           display: false,
         },
       };
@@ -960,7 +960,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       return {
         message: {
           customType: "agent-plan-context",
-          content: buildReviewPrompt(md),
+          content: buildReviewPrompt(md, ctx.model),
           display: false,
         },
       };
@@ -974,7 +974,7 @@ export default function agentPlanExtension(pi: ExtensionAPI): void {
       return {
         message: {
           customType: "agent-plan-context",
-          content: buildBuildPrompt(remaining),
+          content: buildBuildPrompt(remaining, ctx.model),
           display: false,
         },
       };

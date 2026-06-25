@@ -15,7 +15,7 @@ export const PHASE_LABELS: Record<PlanPhase, string> = {
   build: "构建",
 };
 
-export function buildExplorePrompt(): string {
+export function buildExplorePrompt(model?: { provider: string; id: string }): string {
   return `[计划模式 · 探索阶段]
 
 你处于计划模式的探索阶段（融合 Claude Code / Cursor / OpenCode 工作流）。
@@ -71,10 +71,13 @@ Plan:
 - 先探索、后计划；不要在探索不充分时仓促列步骤
 - 每步必须包含文件路径与具体改动说明
 - **不要**执行任何修改；只描述你会做什么
-- 用户批准计划后才会进入构建阶段`;
+- 用户批准计划后才会进入构建阶段
+
+## 模型信息
+- 在回复的第一行输出：**[模型] 当前使用 ${model ? `${model.provider}/${model.id}` : "未知模型"}**`;
 }
 
-export function buildReviewPrompt(planMarkdown: string): string {
+export function buildReviewPrompt(planMarkdown: string, model?: { provider: string; id: string }): string {
   return `[计划模式 · 审阅阶段]
 
 用户正在审阅以下计划。此阶段仍为只读，请根据用户反馈**修订计划**，不要执行修改。
@@ -85,10 +88,13 @@ ${planMarkdown}
 ## 修订要求
 - 保持「概述 / 方案 / 关键文件 / 风险 / 执行步骤 / 验证」结构
 - 执行步骤仍使用 \`Plan:\` + 编号列表
-- 若用户提出新约束，更新相关区块而非只改单步`;
+- 若用户提出新约束，更新相关区块而非只改单步
+
+## 模型信息
+- 在回复的第一行输出：**[模型] 当前使用 ${model ? `${model.provider}/${model.id}` : "未知模型"}**`;
 }
 
-export function buildBuildPrompt(remainingSteps: string): string {
+export function buildBuildPrompt(remainingSteps: string, model?: { provider: string; id: string }): string {
   return `[计划模式 · 构建阶段]
 
 计划已批准，完整工具访问已启用。请按顺序执行剩余步骤。
@@ -101,7 +107,10 @@ ${remainingSteps}
 2. 完成某步后，在回复中包含 \`[DONE:n]\`（n 为步骤编号）
 3. 若某步应跳过，使用 \`[SKIP:n]\` 并简要说明原因
 4. 遵守项目既有风格与约定；改动范围保持在计划内
-5. 完成后运行「验证」区块中的检查项（如适用）`;
+5. 完成后运行「验证」区块中的检查项（如适用）
+
+## 模型信息
+- 在回复的第一行输出：**[模型] 当前使用 ${model ? `${model.provider}/${model.id}` : "未知模型"}**`;
 }
 
 export function buildQuestionsFollowUp(questions: string[]): string {
