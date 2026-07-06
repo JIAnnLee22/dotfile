@@ -1,11 +1,5 @@
 {
-  "extensions": [
-    "~/.config/pi/extensions/devin"
-  ],
   "packages": [
-    "npm:@offbynan/pi-cursor-provider",
-    "git:github.com/badlogic/pi-skills",
-    "git:github.com/anthropics/skills",
     "npm:@narumitw/pi-codex-usage"
   ],
   "skills": [
