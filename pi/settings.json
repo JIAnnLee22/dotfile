@@ -3,7 +3,8 @@
     "npm:@narumitw/pi-codex-usage"
   ],
   "skills": [
-    "./skills"
+    "./skills",
+    "+skills/chinese-mode/SKILL.md"
   ],
   "lastChangelogVersion": "0.80.3",
   "defaultProvider": "openai-codex",
