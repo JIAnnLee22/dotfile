@@ -5,14 +5,15 @@
   "packages": [
     "npm:@offbynan/pi-cursor-provider",
     "git:github.com/badlogic/pi-skills",
-    "git:github.com/anthropics/skills"
+    "git:github.com/anthropics/skills",
+    "npm:@narumitw/pi-codex-usage"
   ],
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.80.2",
-  "defaultProvider": "opencode",
-  "defaultModel": "minimax-m2.7",
+  "lastChangelogVersion": "0.80.3",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5",
   "defaultThinkingLevel": "high",
   "theme": "dark",
   "planModel": "opencode/minimax-m2.7",
