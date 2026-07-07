@@ -15,5 +15,5 @@
   "defaultThinkingLevel": "high",
   "theme": "dark",
   "planModel": "openai-codex/gpt-5.5",
-  "executionModel": "openai-codex/gpt-5.4-mini"
+  "executionModel": "openai-codex/gpt-5.5"
 }
