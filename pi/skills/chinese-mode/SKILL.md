@@ -1,6 +1,7 @@
 ---
 name: chinese-mode
-description: 强制 AI 使用中文进行思考和输出，包括代码注释、提交信息、文档等。当用户需要中文输出或长时间对话保持中文时使用。
+description: 强制 AI 使用中文进行思考和输出，包括代码注释、提交信息、文档等。手动执行 /skill:chinese-mode 时加载。
+disable-model-invocation: true
 ---
 
 # 中文模式 (Chinese Mode)

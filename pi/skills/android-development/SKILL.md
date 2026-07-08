@@ -1,6 +1,7 @@
 ---
 name: android-development
-description: Android app development with Kotlin/Java, Jetpack Compose, Gradle build system, ADB debugging, and best practices. Use when building, debugging, or refactoring Android applications.
+description: Android app development with Kotlin/Java, Jetpack Compose, Gradle build system, ADB debugging, and best practices. 手动执行 /skill:android-development 时加载。
+disable-model-invocation: true
 ---
 
 # Android 开发技能

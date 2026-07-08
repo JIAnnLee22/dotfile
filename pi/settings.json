@@ -3,8 +3,7 @@
     "npm:@narumitw/pi-codex-usage"
   ],
   "skills": [
-    "./skills",
-    "+skills/chinese-mode/SKILL.md"
+    "./skills"
   ],
   "extensions": [
     "./extensions"

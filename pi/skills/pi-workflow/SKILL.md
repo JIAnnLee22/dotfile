@@ -1,6 +1,7 @@
 ---
 name: pi-workflow
-description: pi coding agent 默认工作流强化。用于默认启用仓库搜索、网页搜索、写入护栏和状态恢复；计划模式仍需手动开启。适合 pi coding agent 的日常代码理解、规划和实现任务。
+description: pi coding agent 工作流强化说明。工作流增强由 extension 默认注入；本 skill 仅在用户手动 /skill:pi-workflow 时加载，用于查看约定。
+disable-model-invocation: true
 ---
 
 # Pi Workflow
@@ -23,4 +24,4 @@ description: pi coding agent 默认工作流强化。用于默认启用仓库搜
 
 ## 备注
 
-该 skill 由 pi 自动加载，用于强化默认工作流，不要求用户手动启用。
+该 skill 不再自动进入模型上下文；默认工作流由 `extensions/workflow.ts` 注入。需要查看完整约定时，手动执行 `/skill:pi-workflow`。

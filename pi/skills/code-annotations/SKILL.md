@@ -1,6 +1,7 @@
 ---
 name: code-annotations
-description: 写代码时根据项目场景和代码逻辑重要性，按需添加注释和日志输出。非强制固定规则，而是在编码过程中根据上下文灵活判断。当用户编写代码、修改函数、实现新功能时自动生效。
+description: 写代码时根据项目场景和代码逻辑重要性，按需添加注释和日志输出。手动执行 /skill:code-annotations 时加载。
+disable-model-invocation: true
 ---
 
 # 代码注释与日志规范

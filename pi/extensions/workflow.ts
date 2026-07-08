@@ -1,13 +1,16 @@
 /// <reference path="../types.d.ts" />
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getKeybindings, Input, truncateToWidth, visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const WORKFLOW_STATE_TYPE = "workflow-state";
+const LEGACY_PLAN_FILE = ".plan/workflow-plan.md";
+const DEFAULT_PLAN_DIR = ".plan/sessions";
+const DEFAULT_PLAN_FILE_STEM = "workflow-plan";
 const CUSTOM_TOOL_NAMES = ["repo_search", "web_search"] as const;
 const NORMAL_BASH_ALLOWLIST = [
 	/^cat\b/,
@@ -54,6 +57,10 @@ interface WorkflowState {
 	originalModel?: ModelRef;
 	planModel?: ModelRef;
 	executionModel?: ModelRef;
+	planFilePath?: string;
+	restoredPlanPath?: string;
+	planNeedsCalibration?: boolean;
+	abandoned?: boolean;
 }
 
 interface PlanStep {
@@ -62,10 +69,20 @@ interface PlanStep {
 	completed: boolean;
 }
 
+interface ExistingPlanFile {
+	path: string;
+	steps: PlanStep[];
+	completed: boolean;
+	mtimeMs: number;
+	managed: boolean;
+	abandoned: boolean;
+}
+
 interface WorkflowConfig {
 	defaultProvider?: string;
 	planModel?: string;
 	executionModel?: string;
+	planFile?: string;
 }
 
 type WorkflowModelRole = "plan" | "execution";
@@ -733,18 +750,20 @@ function extractPlanSteps(text: string): PlanStep[] {
 			continue;
 		}
 		if (!inPlan) continue;
+		if (steps.length > 0 && (!line || /^#{1,6}\s+/.test(line))) break;
+		if (steps.length > 0 && !/^(\d+)[\.)]\s+/.test(line)) break;
 
 		const match = line.match(/^(\d+)[\.)]\s+(.*\S)\s*$/);
 		if (match) {
 			steps.push({
-				step: Number(match[1]),
+				step: steps.length + 1,
 				text: match[2],
 				completed: false,
 			});
 		}
 	}
 
-	return steps.sort((a, b) => a.step - b.step);
+	return steps;
 }
 
 function markDoneSteps(text: string, steps: PlanStep[]): number {
@@ -759,6 +778,131 @@ function markDoneSteps(text: string, steps: PlanStep[]): number {
 		}
 	}
 	return changed;
+}
+
+function countDoneSteps(steps: PlanStep[]): number {
+	return steps.filter((item) => item.completed).length;
+}
+
+function parsePlanFileSteps(text: string): PlanStep[] {
+	const steps: PlanStep[] = [];
+	let fallbackStep = 1;
+	let inGeneratedPlan = false;
+	const hasGeneratedPlanSection = /^##\s+Plan\s*$/im.test(text);
+
+	for (const rawLine of text.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (/^##\s+Plan\s*$/i.test(line)) {
+			inGeneratedPlan = true;
+			continue;
+		}
+		if (inGeneratedPlan && /^##\s+/.test(line)) {
+			inGeneratedPlan = false;
+		}
+		if (hasGeneratedPlanSection && !inGeneratedPlan) continue;
+
+		const numbered = line.match(/^(\d+)[\.)]\s+\[([ xX])\]\s+(.*\S)\s*$/);
+		if (numbered) {
+			steps.push({
+				step: Number(numbered[1]),
+				completed: numbered[2].toLowerCase() === "x",
+				text: numbered[3],
+			});
+			fallbackStep = Math.max(fallbackStep, Number(numbered[1]) + 1);
+			continue;
+		}
+
+		const task = line.match(/^-\s+\[([ xX])\]\s+(.*\S)\s*$/);
+		if (task) {
+			steps.push({
+				step: fallbackStep,
+				completed: task[1].toLowerCase() === "x",
+				text: task[2],
+			});
+			fallbackStep += 1;
+		}
+	}
+	return steps.sort((a, b) => a.step - b.step);
+}
+
+function normalizePlanFilePath(input: string | undefined): string {
+	const value = input?.trim().replace(/\\/g, "/");
+	if (!value || value === ".plan") return LEGACY_PLAN_FILE;
+	if (value.startsWith(".plan/")) return value;
+	const fileName = value.split("/").filter(Boolean).pop() ?? basename(LEGACY_PLAN_FILE);
+	return `.plan/${fileName}`;
+}
+
+function stripMarkdownExtension(fileName: string): string {
+	return fileName.replace(/\.md$/i, "");
+}
+
+function toSafePlanPathSegment(input: string): string {
+	const safe = input
+		.trim()
+		.replace(/\.(jsonl|json)$/i, "")
+		.replace(/[^a-zA-Z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 96);
+	return safe || "session";
+}
+
+function getConfiguredPlanTarget(input: string | undefined): { dir: string; stem: string } {
+	const value = input?.trim().replace(/\\/g, "/");
+	if (!value) return { dir: DEFAULT_PLAN_DIR, stem: DEFAULT_PLAN_FILE_STEM };
+	if (value === ".plan") return { dir: ".plan", stem: DEFAULT_PLAN_FILE_STEM };
+	if (value.endsWith("/")) {
+		const normalizedDir = value.startsWith(".plan/") ? value.replace(/\/+$/g, "") : `.plan/${basename(value.replace(/\/+$/g, ""))}`;
+		return { dir: normalizedDir || DEFAULT_PLAN_DIR, stem: DEFAULT_PLAN_FILE_STEM };
+	}
+
+	const normalized = normalizePlanFilePath(value);
+	return {
+		dir: dirname(normalized),
+		stem: toSafePlanPathSegment(stripMarkdownExtension(basename(normalized))) || DEFAULT_PLAN_FILE_STEM,
+	};
+}
+
+function buildPlanFileMarkdown(snapshot: WorkflowState): string {
+	const steps = snapshot.planSteps ?? [];
+	const done = countDoneSteps(steps);
+	const nextStep = steps.find((item) => !item.completed);
+	const lines = [
+		"# Workflow Plan",
+		"",
+		"> 该文件由 pi workflow extension 自动维护，用于持久化计划与执行进度。",
+		"",
+		"## Metadata",
+		`- Mode: ${snapshot.mode}`,
+		`- Updated: ${new Date().toISOString()}`,
+		`- Progress: ${done}/${steps.length}`,
+		`- Next: ${nextStep ? `${nextStep.step}. ${nextStep.text}` : steps.length > 0 ? "全部完成" : "暂无计划步骤"}`,
+		`- Plan model: ${formatModelRef(snapshot.planModel) ?? "default"}`,
+		`- Execution model: ${formatModelRef(snapshot.executionModel) ?? "default"}`,
+		`- Restored from: ${snapshot.restoredPlanPath ?? "none"}`,
+		`- Needs calibration: ${snapshot.planNeedsCalibration ? "yes" : "no"}`,
+		`- Disposition: ${snapshot.abandoned ? "abandoned" : "active"}`,
+		"",
+		"## Plan",
+	];
+
+	if (steps.length === 0) {
+		lines.push("暂无计划步骤，等待计划生成。");
+	} else {
+		for (const item of steps) {
+			lines.push(`${item.step}. [${item.completed ? "x" : " "}] ${item.text}`);
+		}
+	}
+
+	lines.push(
+		"",
+		"## Progress Rules",
+		"- 执行阶段每轮开始前会读取本文件，同步已有勾选状态。",
+		"- 助手完成步骤后应在回复中标记 `[DONE:n]`，插件会把对应步骤勾选并重写本文件。",
+		"- 如需手动修正进度，可直接修改上方 `## Plan` 的复选框。",
+		"",
+	);
+	return lines.join("\n");
 }
 
 function isAssistantMessage(message: { role?: string; content?: unknown }): message is { role: "assistant"; content: Array<{ type: string; text?: string }> } {
@@ -828,6 +972,7 @@ async function pickItem(ctx: ExtensionContext, title: string, items: PickerItem[
 export default function workflowExtension(pi: ExtensionAPI): void {
 	let workflowConfig: WorkflowConfig = {};
 	let state: WorkflowState = { mode: "normal" };
+	let pendingPlanFilePath: string | undefined;
 
 	pi.registerFlag("plan", {
 		description: "启动计划模式（手动开启）",
@@ -848,23 +993,32 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				await exitExecutionMode(ctx, true);
 			}
 
+			const decision = await maybeContinueExistingPlan(ctx);
+			if (decision === "restored-plan") {
+				ctx.ui.notify(`已恢复旧计划作为持久化任务状态：${getPlanFileDisplayPath(ctx.cwd)}。请让助手先校准计划，再确认继续、修订或废弃。`, "info");
+				return;
+			}
+
 			await enterPlanMode(ctx);
-			ctx.ui.notify("计划模式已开启", "info");
+			ctx.ui.notify(`计划模式已开启，计划文件：${getPlanFileDisplayPath(ctx.cwd)}`, "info");
 		},
 	});
 
 	pi.registerCommand("plan-status", {
 		description: "查看计划模式状态",
 		handler: async (_args, ctx) => {
+			if (syncPlanProgressFromFile(ctx)) {
+				updateStatus(ctx);
+			}
 			const mode = state.mode;
 			const total = state.planSteps?.length ?? 0;
-			const done = state.planSteps?.filter((item) => item.completed).length ?? 0;
+			const done = countDoneSteps(state.planSteps ?? []);
 			const planModel = formatModelRef(state.planModel ?? parseModelRef(workflowConfig.planModel, workflowConfig.defaultProvider)) ?? "未设置";
 			const executionModel =
 				formatModelRef(state.executionModel ?? parseModelRef(workflowConfig.executionModel, workflowConfig.defaultProvider)) ??
 				"未设置";
 			ctx.ui.notify(
-				`当前模式：${mode}\n计划步骤：${done}/${total}\n计划模型：${planModel}\n执行模型：${executionModel}`,
+				`当前模式：${mode}\n计划步骤：${done}/${total}\n计划文件：${getPlanFileDisplayPath(ctx.cwd)}\n恢复来源：${state.restoredPlanPath ?? "无"}\n需要校准：${state.planNeedsCalibration ? "是" : "否"}\n计划模型：${planModel}\n执行模型：${executionModel}`,
 				"info",
 			);
 		},
@@ -923,7 +1077,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				await setModelByRef(ctx, modelRef);
 			}
 			if (state.mode !== "normal") {
-				persistState();
+				persistWorkflow(ctx);
 			}
 			ctx.ui.notify(
 				`${getWorkflowModelRoleLabel(role)}已设置为：${formatModelRef(modelRef) ?? "不自动切换"}`,
@@ -945,9 +1099,13 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify("请先使用 /plan 进入计划模式", "warning");
 				return;
 			}
+			if (state.planNeedsCalibration) {
+				ctx.ui.notify("旧计划刚恢复为持久化任务状态，请先让助手按当前代码和新目标校准计划，再确认执行。", "warning");
+				return;
+			}
 
 			await enterExecutionMode(ctx);
-			ctx.ui.notify("已切换到执行模式", "info");
+			ctx.ui.notify(`已切换到执行模式，进度将同步到 ${getPlanFileDisplayPath(ctx.cwd)}`, "info");
 		},
 	});
 
@@ -962,6 +1120,8 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				await exitExecutionMode(ctx, true);
 				return;
 			}
+			const decision = await maybeContinueExistingPlan(ctx);
+			if (decision === "restored-plan") return;
 			await enterPlanMode(ctx);
 		},
 	});
@@ -1024,6 +1184,140 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 		pi.appendEntry(WORKFLOW_STATE_TYPE, state);
 	}
 
+	function resolvePlanDir(cwd: string): string {
+		return resolve(cwd, ".plan");
+	}
+
+	function resolvePlanFilePath(cwd: string, snapshot: WorkflowState = state): string {
+		return resolve(cwd, normalizePlanFilePath(snapshot.planFilePath ?? workflowConfig.planFile));
+	}
+
+	function getPlanFileDisplayPath(cwd: string, snapshot: WorkflowState = state): string {
+		return toRelativePath(cwd, resolvePlanFilePath(cwd, snapshot));
+	}
+
+	function writePlanFile(cwd: string, snapshot: WorkflowState = state): void {
+		const planFile = resolvePlanFilePath(cwd, snapshot);
+		mkdirSync(dirname(planFile), { recursive: true });
+		writeFileSync(planFile, buildPlanFileMarkdown(snapshot), "utf-8");
+	}
+
+	function writePlanIndex(cwd: string, snapshot: WorkflowState = state): void {
+		const steps = snapshot.planSteps ?? [];
+		const indexPath = resolve(cwd, ".plan", "index.json");
+		mkdirSync(dirname(indexPath), { recursive: true });
+		writeFileSync(
+			indexPath,
+			`${JSON.stringify(
+				{
+					version: 1,
+					updated: new Date().toISOString(),
+					mode: snapshot.mode,
+					activePlan: snapshot.planFilePath ? normalizePlanFilePath(snapshot.planFilePath) : undefined,
+					restoredFrom: snapshot.restoredPlanPath,
+					needsCalibration: snapshot.planNeedsCalibration ?? false,
+					disposition: snapshot.abandoned ? "abandoned" : "active",
+					progress: { done: countDoneSteps(steps), total: steps.length },
+				},
+				null,
+				2,
+			)}\n`,
+			"utf-8",
+		);
+	}
+
+	function getSessionPlanStem(ctx: ExtensionContext): string {
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		if (sessionFile) return toSafePlanPathSegment(basename(sessionFile));
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		return `ephemeral-${stamp}`;
+	}
+
+	function ensureUniquePlanFilePath(cwd: string, relativePath: string): string {
+		if (!existsSync(resolve(cwd, relativePath))) return relativePath;
+		const parsedDir = dirname(relativePath);
+		const stem = stripMarkdownExtension(basename(relativePath));
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		return `${parsedDir}/${stem}-${stamp}.md`;
+	}
+
+	function createNewPlanFilePath(ctx: ExtensionContext): string {
+		const target = getConfiguredPlanTarget(workflowConfig.planFile);
+		const sessionStem = getSessionPlanStem(ctx);
+		const preferred = `${target.dir}/${target.stem}-${sessionStem}.md`;
+		return ensureUniquePlanFilePath(ctx.cwd, preferred);
+	}
+
+	function collectPlanMarkdownFiles(dir: string): string[] {
+		if (!existsSync(dir)) return [];
+		const output: string[] = [];
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const path = resolve(dir, entry.name);
+			if (entry.isDirectory()) {
+				output.push(...collectPlanMarkdownFiles(path));
+			} else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+				output.push(path);
+			}
+		}
+		return output;
+	}
+
+	function findExistingPlanFiles(cwd: string): ExistingPlanFile[] {
+		const planDir = resolvePlanDir(cwd);
+		if (!existsSync(planDir)) return [];
+
+		return collectPlanMarkdownFiles(planDir)
+			.map((path) => {
+				try {
+					const text = readFileSync(path, "utf-8");
+					const abandoned = /^-\s*Disposition:\s*abandoned\s*$/im.test(text);
+					const steps = parsePlanFileSteps(text);
+					const relativePath = toRelativePath(cwd, path).replace(/\\/g, "/");
+					const fileName = basename(relativePath);
+					return {
+						path,
+						steps,
+						completed: steps.length > 0 && steps.every((item) => item.completed),
+						mtimeMs: statSync(path).mtimeMs,
+						managed: text.includes("pi workflow extension") || fileName.startsWith("workflow-plan"),
+						abandoned,
+					};
+				} catch {
+					return undefined;
+				}
+			})
+			.filter((item): item is ExistingPlanFile => Boolean(item && item.managed && item.steps.length > 0 && !item.abandoned))
+			.sort((a, b) => Number(b.managed) - Number(a.managed) || b.mtimeMs - a.mtimeMs);
+	}
+
+	function persistWorkflow(ctx: ExtensionContext): void {
+		persistState();
+		if (state.mode !== "normal") {
+			writePlanFile(ctx.cwd);
+		}
+		writePlanIndex(ctx.cwd);
+	}
+
+	function syncPlanProgressFromFile(ctx: ExtensionContext): boolean {
+		if (state.mode === "normal") return false;
+		const planFile = resolvePlanFilePath(ctx.cwd);
+		if (!existsSync(planFile)) return false;
+
+		try {
+			const fileSteps = parsePlanFileSteps(readFileSync(planFile, "utf-8"));
+			if (fileSteps.length === 0) return false;
+			const current = JSON.stringify(state.planSteps ?? []);
+			const next = JSON.stringify(fileSteps);
+			if (current === next) return false;
+			state.planSteps = fileSteps;
+			persistState();
+			return true;
+		} catch (error) {
+			ctx.ui.notify(`读取计划文件失败：${error instanceof Error ? error.message : String(error)}`, "warning");
+			return false;
+		}
+	}
+
 	function updateStatus(ctx: ExtensionContext): void {
 		if (state.mode === "plan") {
 			ctx.ui.setStatus("workflow", ctx.ui.theme.fg("warning", "📝 plan"));
@@ -1072,8 +1366,139 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 		}
 	}
 
+	async function loadExistingPlan(ctx: ExtensionContext, planFile: ExistingPlanFile, mode: "plan" | "execution"): Promise<void> {
+		const restoredPath = normalizePlanFilePath(toRelativePath(ctx.cwd, planFile.path));
+		state = {
+			mode: "plan",
+			planSteps: planFile.steps,
+			toolsBeforePlan: pi.getActiveTools(),
+			originalModel: toModelRef(ctx.model),
+			planModel: parseModelRef(workflowConfig.planModel, workflowConfig.defaultProvider),
+			executionModel: parseModelRef(workflowConfig.executionModel, workflowConfig.defaultProvider),
+			planFilePath: planFile.managed ? restoredPath : createNewPlanFilePath(ctx),
+			restoredPlanPath: restoredPath,
+			planNeedsCalibration: true,
+		};
+
+		pi.setActiveTools(ensureCustomTools(removeWriteTools(state.toolsBeforePlan ?? pi.getActiveTools())));
+		await setModelByRef(ctx, state.planModel);
+		updateStatus(ctx);
+		persistWorkflow(ctx);
+
+		if (mode === "execution") {
+			await enterExecutionMode(ctx);
+		}
+	}
+
+	async function maybeContinueExistingPlan(ctx: ExtensionContext): Promise<"restored-plan" | "new-plan"> {
+		const plans = findExistingPlanFiles(ctx.cwd);
+		if (plans.length === 0) return "new-plan";
+
+		const unfinished = plans.find((item) => !item.completed);
+		if (!unfinished) {
+			const latest = plans[0];
+			if (latest) {
+				pendingPlanFilePath = createNewPlanFilePath(ctx);
+				ctx.ui.notify(`.plan 目录中发现 ${plans.length} 个计划，最新计划已完成：${toRelativePath(ctx.cwd, latest.path)}，将为当前 session 创建独立新计划。`, "info");
+			}
+			return "new-plan";
+		}
+
+		await loadExistingPlan(ctx, unfinished, "plan");
+		const done = countDoneSteps(unfinished.steps);
+		ctx.ui.notify(
+			`已恢复未完成计划作为持久化任务状态：${toRelativePath(ctx.cwd, unfinished.path)}\n当前进度：${done}/${unfinished.steps.length}\n下一轮会先按当前代码和用户新目标校准计划。`,
+			"info",
+		);
+		return "restored-plan";
+	}
+
+	function copyRestoredPlanToSessionPlan(ctx: ExtensionContext): void {
+		state = {
+			...state,
+			planFilePath: createNewPlanFilePath(ctx),
+			restoredPlanPath: undefined,
+			planNeedsCalibration: false,
+			abandoned: false,
+		};
+		persistWorkflow(ctx);
+	}
+
+	async function discardRestoredPlanAndStartNew(ctx: ExtensionContext): Promise<void> {
+		if (state.restoredPlanPath || state.planSteps?.length) {
+			writePlanFile(ctx.cwd, { ...state, mode: "normal", planNeedsCalibration: false, abandoned: true });
+		}
+		const toolsBeforePlan = state.toolsBeforePlan ?? pi.getActiveTools();
+		const originalModel = state.originalModel ?? toModelRef(ctx.model);
+		const planModel = state.planModel ?? parseModelRef(workflowConfig.planModel, workflowConfig.defaultProvider);
+		const executionModel = state.executionModel ?? parseModelRef(workflowConfig.executionModel, workflowConfig.defaultProvider);
+		state = {
+			mode: "plan",
+			planSteps: [],
+			toolsBeforePlan,
+			originalModel,
+			planModel,
+			executionModel,
+			planFilePath: createNewPlanFilePath(ctx),
+			planNeedsCalibration: false,
+			abandoned: false,
+		};
+		pi.setActiveTools(ensureCustomTools(removeWriteTools(toolsBeforePlan)));
+		await setModelByRef(ctx, planModel);
+		updateStatus(ctx);
+		persistWorkflow(ctx);
+		ctx.ui.notify(`已废弃旧计划上下文，并为当前 session 创建新计划文件：${getPlanFileDisplayPath(ctx.cwd)}`, "info");
+	}
+
+	async function handlePlanCalibrationDecision(ctx: ExtensionContext): Promise<void> {
+		if (!state.planNeedsCalibration) return;
+		if (!ctx.hasUI) {
+			state.planNeedsCalibration = false;
+			persistWorkflow(ctx);
+			ctx.ui.notify("旧计划已校准。当前模式无法弹出确认，请使用 /plan-execute 继续执行，或直接修改计划文件后再执行。", "info");
+			return;
+		}
+
+		const choice = await ctx.ui.select("旧计划已校准，下一步？", [
+			"继续执行校准后的任务文件",
+			"复制为当前 session 新计划并执行",
+			"复制为当前 session 新计划并继续修订",
+			"继续在原任务文件修订",
+			"废弃旧计划并新建空计划",
+		]);
+		if (choice?.startsWith("继续执行")) {
+			state.planNeedsCalibration = false;
+			state.restoredPlanPath = undefined;
+			persistWorkflow(ctx);
+			await enterExecutionMode(ctx);
+			ctx.ui.notify(`已确认继续执行任务文件，进度将同步到 ${getPlanFileDisplayPath(ctx.cwd)}`, "info");
+			return;
+		}
+		if (choice?.startsWith("复制为当前 session 新计划并执行")) {
+			copyRestoredPlanToSessionPlan(ctx);
+			await enterExecutionMode(ctx);
+			ctx.ui.notify(`已复制为当前 session 独立计划并开始执行：${getPlanFileDisplayPath(ctx.cwd)}`, "info");
+			return;
+		}
+		if (choice?.startsWith("复制为当前 session 新计划并继续修订")) {
+			copyRestoredPlanToSessionPlan(ctx);
+			ctx.ui.notify(`已复制为当前 session 独立计划，可继续修订：${getPlanFileDisplayPath(ctx.cwd)}`, "info");
+			return;
+		}
+		if (choice?.startsWith("废弃")) {
+			await discardRestoredPlanAndStartNew(ctx);
+			return;
+		}
+
+		state.planNeedsCalibration = false;
+		persistWorkflow(ctx);
+		ctx.ui.notify("已保持原任务文件的计划模式，可继续修订；确认后使用 /plan-execute 执行。", "info");
+	}
+
 	async function enterPlanMode(ctx: ExtensionContext): Promise<void> {
 		if (state.mode === "plan") return;
+		const planFilePath = pendingPlanFilePath ?? createNewPlanFilePath(ctx);
+		pendingPlanFilePath = undefined;
 		state = {
 			mode: "plan",
 			planSteps: [],
@@ -1081,29 +1506,35 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 			originalModel: toModelRef(ctx.model),
 			planModel: parseModelRef(workflowConfig.planModel, workflowConfig.defaultProvider),
 			executionModel: parseModelRef(workflowConfig.executionModel, workflowConfig.defaultProvider),
+			planFilePath,
+			planNeedsCalibration: false,
 		};
 
 		const nextTools = removeWriteTools(state.toolsBeforePlan ?? pi.getActiveTools());
 		pi.setActiveTools(ensureCustomTools(nextTools));
 		await setModelByRef(ctx, state.planModel);
 		updateStatus(ctx);
-		persistState();
+		persistWorkflow(ctx);
 	}
 
 	async function enterExecutionMode(ctx: ExtensionContext): Promise<void> {
 		if (state.mode !== "plan") return;
+		syncPlanProgressFromFile(ctx);
 		state.mode = "execution";
 		const nextTools = addWriteTools(state.toolsBeforePlan ?? pi.getActiveTools());
 		pi.setActiveTools(ensureCustomTools(nextTools));
 		await setModelByRef(ctx, state.executionModel);
 		updateStatus(ctx);
-		persistState();
+		persistWorkflow(ctx);
 	}
 
 	async function exitPlanMode(ctx: ExtensionContext): Promise<void> {
 		if (state.mode !== "plan") return;
 		const originalTools = state.toolsBeforePlan ?? pi.getActiveTools();
 		const originalModel = state.originalModel;
+		const finalPlanSnapshot: WorkflowState = { ...state, mode: "normal" };
+		writePlanFile(ctx.cwd, finalPlanSnapshot);
+		writePlanIndex(ctx.cwd, finalPlanSnapshot);
 		pi.setActiveTools(ensureCustomTools(originalTools));
 		state = { mode: "normal" };
 		await setModelByRef(ctx, originalModel);
@@ -1114,8 +1545,11 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 	async function exitExecutionMode(ctx: ExtensionContext, restoreModel: boolean): Promise<void> {
 		if (state.mode !== "execution") return;
 		const originalTools = state.toolsBeforePlan ?? pi.getActiveTools();
-		pi.setActiveTools(ensureCustomTools(originalTools));
 		const originalModel = state.originalModel;
+		const finalPlanSnapshot: WorkflowState = { ...state, mode: "normal" };
+		writePlanFile(ctx.cwd, finalPlanSnapshot);
+		writePlanIndex(ctx.cwd, finalPlanSnapshot);
+		pi.setActiveTools(ensureCustomTools(originalTools));
 		state = { mode: "normal" };
 		if (restoreModel) {
 			await setModelByRef(ctx, originalModel);
@@ -1167,10 +1601,17 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 		return undefined;
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
 		const hasRepoSearch = event.systemPromptOptions.selectedTools?.includes("repo_search") ?? false;
 		const hasWebSearch = event.systemPromptOptions.selectedTools?.includes("web_search") ?? false;
 		const guidance: string[] = [];
+
+		if (state.mode !== "normal") {
+			if (syncPlanProgressFromFile(ctx)) {
+				updateStatus(ctx);
+			}
+			writePlanFile(ctx.cwd);
+		}
 
 		if (state.mode === "plan") {
 			guidance.push(
@@ -1178,13 +1619,31 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				"只做分析和规划，不要编辑或写入文件。",
 				"优先使用 repo_search 和 read 收集上下文；需要外部资料时可使用 web_search。",
 				"输出一个结构化的 Plan: 段落，并使用 1、2、3 这样的编号步骤。",
+				`计划文件会落盘到 ${getPlanFileDisplayPath(ctx.cwd)}，生成或更新计划后插件会自动写入。`,
 				"计划完成后，等待用户使用 /plan-execute 切换到执行模式。",
 			);
+			if (state.planNeedsCalibration) {
+				const steps = state.planSteps ?? [];
+				const done = countDoneSteps(steps);
+				const restoredPath = state.restoredPlanPath ?? getPlanFileDisplayPath(ctx.cwd);
+				guidance.push(
+					`已从持久化任务状态恢复旧计划：${restoredPath}，当前进度：${done}/${steps.length}。`,
+					"先把旧计划当作任务状态，而不是聊天历史；不要直接执行。",
+					"本轮需要结合当前代码状态和用户的新目标校准旧计划：标出保留、调整、删除和新增的步骤。",
+					"校准后输出新的 Plan: 编号步骤，并简短说明主要变更与风险。",
+					"校准完成后等待用户确认继续执行、继续修订或废弃旧计划。",
+				);
+			}
 		} else if (state.mode === "execution") {
+			const steps = state.planSteps ?? [];
+			const done = countDoneSteps(steps);
+			const nextStep = steps.find((item) => !item.completed);
 			guidance.push(
 				"你现在处于执行模式。",
-				"根据当前计划逐步实现，尽量保持改动最小且可验证。",
-				"每完成一个计划步骤，在回复中标记 [DONE:n]。",
+				`本地计划文件：${getPlanFileDisplayPath(ctx.cwd)}，当前进度：${done}/${steps.length}。`,
+				nextStep ? `下一步优先处理：${nextStep.step}. ${nextStep.text}` : "所有计划步骤都已标记完成。",
+				"每轮执行前先对照计划和进度，优先处理未完成步骤。",
+				"每完成一个计划步骤，在回复中标记 [DONE:n]，插件会把进度同步到本地计划文件。",
 				"优先使用 repo_search 定位代码，使用 read 查看内容，使用 write/edit 进行修改。",
 			);
 		} else {
@@ -1224,13 +1683,19 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				originalModel: lastState.data.originalModel,
 				planModel: parseModelRef(workflowConfig.planModel, workflowConfig.defaultProvider),
 				executionModel: parseModelRef(workflowConfig.executionModel, workflowConfig.defaultProvider),
+				planFilePath: normalizePlanFilePath(lastState.data.planFilePath ?? workflowConfig.planFile),
+				restoredPlanPath: lastState.data.restoredPlanPath ? normalizePlanFilePath(lastState.data.restoredPlanPath) : undefined,
+				planNeedsCalibration: lastState.data.planNeedsCalibration ?? false,
 			};
 		} else {
 			state = { mode: "normal" };
 		}
 
 		if (pi.getFlag("plan") === true && state.mode === "normal") {
-			await enterPlanMode(ctx);
+			const decision = await maybeContinueExistingPlan(ctx);
+			if (decision === "new-plan") {
+				await enterPlanMode(ctx);
+			}
 			return;
 		}
 
@@ -1241,11 +1706,15 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 		if (state.mode === "plan") {
 			pi.setActiveTools(ensureCustomTools(removeWriteTools(state.toolsBeforePlan ?? pi.getActiveTools())));
 			await setModelByRef(ctx, state.planModel);
+			syncPlanProgressFromFile(ctx);
+			writePlanFile(ctx.cwd);
 		}
 
 		if (state.mode === "execution") {
 			pi.setActiveTools(ensureCustomTools(addWriteTools(state.toolsBeforePlan ?? pi.getActiveTools())));
 			await setModelByRef(ctx, state.executionModel);
+			syncPlanProgressFromFile(ctx);
+			writePlanFile(ctx.cwd);
 		}
 
 		updateStatus(ctx);
@@ -1258,7 +1727,7 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 		const text = getAssistantText(event.message);
 		if (markDoneSteps(text, state.planSteps ?? []) > 0) {
 			updateStatus(ctx);
-			persistState();
+			persistWorkflow(ctx);
 		}
 	});
 
@@ -1272,14 +1741,19 @@ export default function workflowExtension(pi: ExtensionAPI): void {
 				if (steps.length > 0) {
 					state.planSteps = steps;
 					updateStatus(ctx);
-					persistState();
-					ctx.ui.notify(`已解析计划步骤：${steps.length} 步，可使用 /plan-execute 进入执行模式。`, "info");
+					persistWorkflow(ctx);
+					ctx.ui.notify(`已解析计划步骤：${steps.length} 步，已写入 ${getPlanFileDisplayPath(ctx.cwd)}，可使用 /plan-execute 进入执行模式。`, "info");
+					await handlePlanCalibrationDecision(ctx);
 				}
 			}
 			return;
 		}
 
 		if (state.mode === "execution") {
+			if (syncPlanProgressFromFile(ctx)) {
+				updateStatus(ctx);
+			}
+			writePlanFile(ctx.cwd);
 			const steps = state.planSteps ?? [];
 			if (steps.length > 0 && steps.every((item) => item.completed)) {
 				ctx.ui.notify("计划步骤已完成，正在恢复正常模式。", "info");
