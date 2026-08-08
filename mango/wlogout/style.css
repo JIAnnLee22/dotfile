@@ -1,0 +1,52 @@
+* {
+    background-image: none;
+    box-shadow: none;
+}
+
+window {
+    background-color: rgba(20, 20, 20, 0.85);
+}
+
+button {
+    border-radius: 12px;
+    border: none;
+    color: #ffffff;
+    background-color: #2d2d2d;
+    background-size: 50%;
+    background-repeat: no-repeat;
+    background-position: center;
+    padding: 20px 30px;
+    margin: 8px;
+    min-width: 120px;
+    min-height: 100px;
+    font-size: 14px;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+button:hover {
+    background-color: #3d3d3d;
+}
+
+button:active {
+    background-color: #6c6c6c;
+}
+
+#lock {
+    background-image: url("/usr/share/wlogout/icons/lock.png");
+}
+
+#logout {
+    background-image: url("/usr/share/wlogout/icons/logout.png");
+}
+
+#suspend {
+    background-image: url("/usr/share/wlogout/icons/suspend.png");
+}
+
+#reboot {
+    background-image: url("/usr/share/wlogout/icons/reboot.png");
+}
+
+#shutdown {
+    background-image: url("/usr/share/wlogout/icons/shutdown.png");
+}
