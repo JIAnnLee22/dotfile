@@ -140,7 +140,7 @@
     "custom/power": {
         "format": "󰣇",
         "tooltip": false,
-        "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l  ~/.config/mango/wlogout/layout  -b 6 --protocol layer-shell",
+        "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l ~/.config/mango/wlogout/layout -b 3 --protocol layer-shell",
         "on-click-right": "sleep 0.1s && swaync-client -t -sw",
 
     },
