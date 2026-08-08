@@ -1,16 +1,14 @@
 {
-  "packages": [
-    "npm:@narumitw/pi-codex-usage"
+  "extensions": [
+    "~/.config/pi/extensions/devin"
   ],
+  "packages": [],
   "skills": [
     "./skills"
   ],
-  "extensions": [
-    "./extensions"
-  ],
-  "lastChangelogVersion": "0.80.3",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
+  "lastChangelogVersion": "0.84.1",
+  "defaultProvider": "opencode",
+  "defaultModel": "minimax-m2.7",
   "defaultThinkingLevel": "high",
   "theme": "dark",
   "planModel": "openai-codex/gpt-5.5",
