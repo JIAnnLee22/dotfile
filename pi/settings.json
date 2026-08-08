@@ -2,7 +2,12 @@
   "extensions": [
     "~/.config/pi/extensions/devin"
   ],
-  "packages": [],
+  "packages": [
+    "npm:@ff-labs/pi-fff",
+    "npm:pi-web-access",
+    "npm:context-mode",
+    "npm:pi-subagents"
+  ],
   "skills": [
     "./skills"
   ],
