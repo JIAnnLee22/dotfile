@@ -37,13 +37,7 @@ auth_mode = "api_key"
 [providers.openai_codex]
 auth_mode = "oauth"
 
-[providers.openai_codex.external_credentials]
-access = "read_only"
-provider = "openai-codex"
-source = "codex_cli"
-path = "/home/jiannlee22/.codex/auth.json"
-consent_version = 1
-
+# 本机专用:运行 codewhale auth external-consent --provider openai-codex --mode read-only 会在此处写回授权块
 # [providers.openai_codex.external_credentials]
 # access = "read_only"
 # provider = "openai-codex"
