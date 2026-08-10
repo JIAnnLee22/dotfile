@@ -1,21 +1,29 @@
 {
   "extensions": [
-    "~/.config/pi/extensions/devin"
+    "~/.config/pi/extensions/devin",
+    "~/.config/pi/extensions/dense-ui"
   ],
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-web-access",
     "npm:context-mode",
-    "npm:pi-subagents"
+    "npm:pi-subagents",
+    "npm:claude-agent-sdk-pi"
   ],
   "skills": [
     "./skills"
   ],
   "lastChangelogVersion": "0.84.1",
-  "defaultProvider": "opencode-go",
+  "defaultProvider": "opencode",
   "defaultModel": "deepseek-v4-flash",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "max",
   "theme": "dark",
+  "outputPad": 0,
   "planModel": "openai-codex/gpt-5.5",
-  "executionModel": "openai-codex/gpt-5.5"
+  "executionModel": "openai-codex/gpt-5.5",
+  "hideThinkingBlock": true,
+  "tuiMode": "regular",
+  "warnings": {
+    "anthropicExtraUsage": false
+  }
 }
