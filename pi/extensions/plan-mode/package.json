@@ -1,6 +1,0 @@
-{
-  "name": "plan-mode",
-  "private": true,
-  "type": "module",
-  "description": "Plan mode extension for pi with ambiguity handling (report_ambiguity tool + <ambiguity> marker fallback)"
-}

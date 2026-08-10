@@ -1,27 +1,21 @@
 {
-  "extensions": [
-    "~/.config/pi/extensions/dense-ui",
-    "~/.config/pi/extensions/plan-mode"
-  ],
+  "extensions": [],
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-web-access",
     "npm:context-mode",
-    "npm:pi-subagents",
     "npm:claude-agent-sdk-pi"
   ],
   "skills": [
     "./skills"
   ],
   "lastChangelogVersion": "0.84.1",
-  "defaultProvider": "opencode-go",
-  "defaultModel": "deepseek-v4-flash",
+  "defaultProvider": "claude-agent-sdk",
+  "defaultModel": "claude-opus-5",
   "defaultThinkingLevel": "max",
   "theme": "dark",
   "outputPad": 0,
-  "planModel": "openai-codex/gpt-5.5",
-  "executionModel": "openai-codex/gpt-5.5",
-  "hideThinkingBlock": true,
+  "hideThinkingBlock": false,
   "tuiMode": "fullscreen",
   "warnings": {
     "anthropicExtraUsage": false
