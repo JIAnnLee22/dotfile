@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "steps": {
+    "language": {
+      "status": "verified",
+      "required": true,
+      "version": "inherited"
+    },
+    "provider_model": {
+      "status": "verified",
+      "required": true,
+      "result": "provider=opencode-go, model=deepseek-v4-flash, context_window=1000000 (fallback) auth=key saved · not checked, health=attemptable",
+      "version": "0.9.4"
+    },
+    "trust_sandbox": {
+      "status": "verified",
+      "required": true,
+      "result": "intent=agent, approval=suggest, shell=enabled, trust=trusted, sandbox=default, network=prompt by default",
+      "version": "0.8.67"
+    },
+    "constitution": {
+      "status": "verified",
+      "required": true,
+      "result": "existing constitution kept unchanged",
+      "version": "0.9.4"
+    }
+  },
+  "constitution_choice": "guided_custom",
+  "constitution_checkpoint_completed_for": "0.9.4",
+  "constitution_language": "zh-Hans",
+  "constitution_source": "user_global",
+  "constitution_validity": "valid",
+  "constitution_authoring": "guided",
+  "constitution_preview_hash": "7257698f5ee95ebd",
+  "constitution_preview_version": 1,
+  "runtime_posture_source": "confirmed",
+  "inherited": true
+}

@@ -1,0 +1,55 @@
+auto_compact = false
+auto_compact_threshold_percent = 80.0
+calm_mode = true
+tool_collapse_mode = "compact"
+low_motion = true
+fancy_animations = true
+ocean_treatment = "flat"
+focus_texture = "off"
+work_surface_placement = "top"
+work_surface_top_height = 8
+work_surface_side_width = 30
+rail_panel = "pinned"
+bracketed_paste = true
+paste_burst_detection = true
+mention_menu_limit = 128
+mention_walk_depth = 10
+mention_menu_behavior = "fuzzy"
+show_thinking = true
+thinking_default_expanded = true
+thinking_highlight = true
+show_tool_details = false
+inline_diffs = "summary"
+locale = "zh-Hans"
+theme = "system"
+composer_density = "compact"
+composer_border = true
+composer_vim_mode = "normal"
+transcript_spacing = "compact"
+launch_screen = false
+default_mode = "agent"
+context_panel = false
+cost_currency = "usd"
+max_input_history = 100
+default_provider = "opencode-go"
+reasoning_effort = "max"
+status_indicator = "cw"
+synchronized_output = "auto"
+workspace_follow_symlinks = false
+feature_intro_shown = true
+yolo_deprecation_shown = false
+
+[provider_models]
+vllm = "auto"
+vimedia = "gpt-5.6-sol-quanter"
+xiaomi-mimo = "mimo-v2.5-pro"
+openai = "OpenAI-compatible"
+openai-codex = "gpt-5.5"
+deepseek = "auto"
+opencode-go = "deepseek-v4-flash"
+
+[enabled_models]
+opencode-go = ["deepseek-v4-flash"]
+
+[behavioral_tip_impressions]
+repeated_command_hotbar = 2

@@ -36,3 +36,20 @@ opencode/*.log
 opencode/*.tmp
 opencode/plugin/
 opencode/opencode.json
+
+# codewhale配置 - 隐私密钥与运行时状态不入库（配置本身入库）
+.codewhale/secrets/secrets.json
+.codewhale/secrets/secrets.env
+.codewhale/logs/
+.codewhale/sessions/
+.codewhale/state/
+.codewhale/tasks/
+.codewhale/tool_outputs/
+.codewhale/slop_ledger/
+.codewhale/catalog/
+.codewhale/backup-*/
+.codewhale/*.log
+.codewhale/*.jsonl
+.codewhale/composer_history.txt
+.codewhale/*.bak
+.codewhale/*.lock
