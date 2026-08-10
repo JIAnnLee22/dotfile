@@ -12,8 +12,8 @@
     "./skills"
   ],
   "lastChangelogVersion": "0.84.1",
-  "defaultProvider": "opencode",
-  "defaultModel": "minimax-m2.7",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "deepseek-v4-flash",
   "defaultThinkingLevel": "high",
   "theme": "dark",
   "planModel": "openai-codex/gpt-5.5",
