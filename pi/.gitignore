@@ -36,3 +36,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+# 运行时数据 - 自动生成
+.pi-subagents/
+missions/
+run-history.jsonl
