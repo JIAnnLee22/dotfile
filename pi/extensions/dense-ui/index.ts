@@ -2,7 +2,9 @@ import {
   AssistantMessageComponent,
   BashExecutionComponent,
   CustomMessageComponent,
+  keyHint,
   ToolExecutionComponent,
+  truncateToVisualLines,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -22,6 +24,9 @@ import {
  *                     的 Spacer(1),self-shell 如 edit 工具则去掉装饰性首空行)
  * - bashLeadingBlank 去掉每个 bash 命令块前的空行(BashExecutionComponent 的 Spacer(1))
  * - assistantSpacers 去掉助手消息内部空行(开头、thinking 后、error/abort 前)
+ * - noUserMessageBg   去掉用户消息(发出去的消息)的背景色,只留纯文本
+ * - collapsedMaxLines 折叠状态的工具结果最多显示的显示行数(含终端自动换行);
+ *                     超过则截断并追加 "... (N more lines, 快捷键 to expand)" 提示
  *
  * - 纯运行时修补,不改 dist 文件,`pi update` 后依然生效
  * - /reload 后通过原型上的 Symbol 标记避免重复包装
@@ -33,6 +38,20 @@ import {
 const MARK = Symbol("denseUiPatched");
 const MARK_RENDER = Symbol("denseUiRenderPatched");
 const MARK_UPDATE = Symbol("denseUiUpdatePatched");
+const MARK_CAP = Symbol("denseUiCapPatched");
+const MARK_CAPPED = Symbol("denseUiResultCapped");
+
+/** 与主题 muted(#808080)接近的灰色,用于折叠截断提示 */
+const GRAY = "\x1b[38;5;244m";
+const RESET = "\x1b[0m";
+
+function collapsedHint(more: number, width: number) {
+  const hint =
+    `${GRAY}... (${more} more lines,${RESET} ` +
+    keyHint("app.tools.expand", "to expand") +
+    `${GRAY})${RESET}`;
+  return truncateToVisualLines(hint, 1, width).visualLines[0] ?? hint;
+}
 
 type Any = any;
 
@@ -43,6 +62,8 @@ const CONFIG = {
   toolLeadingBlank: true,
   bashLeadingBlank: true,
   assistantSpacers: true,
+  noUserMessageBg: true,
+  collapsedMaxLines: 10,
 };
 
 function warn(component: string, method: string) {
@@ -69,6 +90,10 @@ export default function (_pi: unknown) {
           const box = this.children?.[0];
           if (box && typeof box.paddingY === "number") {
             box.paddingY = 0;
+          }
+          // 去掉用户消息背景色,只保留纯文本
+          if (CONFIG.noUserMessageBg && box && typeof box.setBgFn === "function") {
+            box.setBgFn(undefined);
           }
         };
       } else {
@@ -197,6 +222,52 @@ export default function (_pi: unknown) {
         };
       } else {
         warn("AssistantMessageComponent", "updateContent");
+      }
+    }
+  }
+
+  // 7) 折叠状态的工具结果:限制最大显示行数(显示行,含终端自动换行),
+  //    避免 find/ls/grep 等工具默认折叠时也展示 15~20 行
+  if (CONFIG.collapsedMaxLines > 0) {
+    const toolProto = ToolExecutionComponent.prototype as Any;
+    if (!toolProto[MARK_CAP]) {
+      if (typeof toolProto.updateDisplay === "function") {
+        const origUpdate = toolProto.updateDisplay;
+        toolProto[MARK_CAP] = true;
+        toolProto.updateDisplay = function (this: Any, ...args: Any[]) {
+          origUpdate.apply(this, args);
+          const comp = this.resultRendererComponent;
+          if (!comp || comp[MARK_CAPPED] || typeof comp.render !== "function") {
+            return;
+          }
+          comp[MARK_CAPPED] = true;
+          const tool = this;
+          const origRender = comp.render;
+          comp.render = function (width: number) {
+            const lines = origRender.call(this, width);
+            if (tool.expanded || tool.result?.isError) {
+              return lines;
+            }
+            const max = CONFIG.collapsedMaxLines;
+            if (!Array.isArray(lines) || lines.length <= max) {
+              return lines;
+            }
+            const kept = lines.slice(0, max);
+            let more = lines.length - max;
+            // 末尾若是以 [ 开头的提示行(如 [Truncated: ...])则保留
+            const tail = lines[lines.length - 1];
+            if (tail && /^\s*\[/.test(tail)) {
+              kept.push(tail);
+              more -= 1;
+            }
+            if (more > 0) {
+              kept.push(collapsedHint(more, width));
+            }
+            return kept;
+          };
+        };
+      } else {
+        warn("ToolExecutionComponent", "updateDisplay");
       }
     }
   }
