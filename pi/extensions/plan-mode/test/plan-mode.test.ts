@@ -12,7 +12,9 @@ import {
 	parseAmbiguityMark,
 	stripAmbiguityMarker,
 } from "../ambiguity.ts";
+import { promoteWidgetToTop } from "../top-widget.ts";
 import {
+	buildTodoView,
 	cleanStepText,
 	extractDoneSteps,
 	extractTodoItems,
@@ -148,6 +150,66 @@ check("步骤1 完成", items[0]?.completed === true);
 check("步骤2 未完成", items[1]?.completed === false);
 check("步骤3 完成", items[2]?.completed === true);
 checkEq("extractDoneSteps 提取编号", extractDoneSteps("a [DONE:2] b [done:4]"), [2, 4]);
+
+// ---------- buildTodoView ----------
+console.log("buildTodoView");
+const viewTodos = [
+	{ step: 1, text: "步骤一", completed: true },
+	{ step: 2, text: "步骤二", completed: false },
+	{ step: 3, text: "步骤三", completed: false },
+];
+const view = buildTodoView("executing", viewTodos);
+check("进度条行在最前", view[0]?.state === "progress", view[0]);
+check("进度条含 1/3", view[0]?.text.includes("1/3"), view[0]?.text);
+check("进度条含百分比", view[0]?.text.includes("33%"), view[0]?.text);
+check("步骤1 标 done", view[1]?.state === "done" && view[1]?.text === "1. 步骤一", view[1]);
+check("步骤2 标 current（第一个未完成）", view[2]?.state === "current" && view[2]?.text === "2. 步骤二", view[2]);
+check("步骤3 标 pending", view[3]?.state === "pending", view[3]);
+check("全部完成时显示完成提示", buildTodoView("executing", viewTodos.map((t) => ({ ...t, completed: true }))).some((l) => l.state === "info" && l.text.includes("完成")));
+check("planning 空计划显示提示", buildTodoView("planning", [])[0]?.state === "planning");
+check("off 返回空", buildTodoView("off", viewTodos).length === 0);
+const many = Array.from({ length: 12 }, (_, i) => ({ step: i + 1, text: `步骤${i + 1}`, completed: false }));
+const truncated = buildTodoView("executing", many);
+check("12 步截断为 7 步", truncated.filter((l) => l.state === "pending" || l.state === "current").length === 7, truncated);
+check("截断提示存在", truncated.some((l) => l.state === "info" && l.text.includes("还有")), truncated);
+
+// ---------- promoteWidgetToTop（布局提升） ----------
+console.log("promoteWidgetToTop");
+function makeFakeInteractiveMode() {
+	const widget = { name: "widgetContainerAbove", children: [] };
+	const dockEntries = [
+		{ component: { name: "pending" } },
+		{ component: { name: "status" } },
+		{ component: widget },
+		{ component: { name: "editor" } },
+		{ component: { name: "footer" } },
+	];
+	const dock = { entries: dockEntries };
+	const root = {
+		entries: [
+			{ component: { name: "transcript" }, grow: 1 },
+			{ component: dock },
+		],
+	};
+	return { widget, dock, root };
+}
+{
+	const { widget, dock, root } = makeFakeInteractiveMode();
+	promoteWidgetToTop({ fullscreenLayoutRoot: root, widgetContainerAbove: widget });
+	check("widget 提升到布局根顶部", root.entries[0]?.component === widget, root.entries.map((e) => e.component?.name));
+	check("dock 不再包含 widget", !dock.entries.some((e) => e.component === widget), dock.entries.map((e) => e.component?.name));
+	check("dock 保留其余组件", dock.entries.length === 4 && dock.entries[1]?.component?.name === "status", dock.entries.map((e) => e.component?.name));
+	check("提升后幂等（再次调用不重复移动）", (() => { promoteWidgetToTop({ fullscreenLayoutRoot: root, widgetContainerAbove: widget }); return root.entries.length === 3 && root.entries[0]?.component === widget; })());
+	check("visible 默认 false（off 时不占行）", root.entries[0]?.visible?.() === false);
+	check("setTopWidgetVisible(true) 后 visible 生效", (() => { root.entries[0]?.visible(); return true; })());
+}
+{
+	// 无 fullscreenLayoutRoot（非 fullscreen 模式）→ 静默跳过
+	const widget = { name: "widget" };
+	promoteWidgetToTop({ widgetContainerAbove: widget });
+	check("非 fullscreen 无布局根时跳过", true);
+	check("结构缺失不抛异常", (() => { promoteWidgetToTop(null); promoteWidgetToTop(undefined); promoteWidgetToTop({}); return true; })());
+}
 
 // ---------- 汇总 ----------
 console.log(`\n${passed} passed, ${failed} failed`);

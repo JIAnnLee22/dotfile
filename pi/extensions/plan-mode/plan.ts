@@ -78,3 +78,72 @@ export function markCompletedSteps(text: string, items: TodoItem[]): number {
 	}
 	return doneSteps.length;
 }
+
+// ---------- 顶部 widget 视图（纯函数，颜色由调用方按 state 应用） ----------
+
+export type TodoViewState = "progress" | "done" | "current" | "pending" | "info" | "planning";
+
+export interface TodoViewLine {
+	state: TodoViewState;
+	text: string;
+}
+
+/**
+ * 生成顶部 widget 的行：
+ * - executing：进度条 + 步骤列表（当前步骤标 current，已完成标 done）
+ * - planning：模式提示，或已有计划的预览列表
+ * - off：空数组（不显示）
+ *
+ * @param maxLines 总行数上限（含进度条与提示行；超出截断并提示）
+ */
+export function buildTodoView(
+	phase: "off" | "planning" | "executing",
+	todos: TodoItem[],
+	maxLines = 8,
+): TodoViewLine[] {
+	if (phase === "off") return [];
+
+	if (todos.length === 0) {
+		return [
+			{
+				state: phase === "planning" ? "planning" : "info",
+				text: phase === "planning"
+					? "⏸ Plan Mode：只读探索中，输出 Plan: 计划后确认执行"
+					: "📋 计划为空",
+			},
+		];
+	}
+
+	const completed = todos.filter((t) => t.completed).length;
+	const total = todos.length;
+	const pct = Math.round((completed / total) * 100);
+	const barWidth = 20;
+	const filled = Math.round((completed / total) * barWidth);
+
+	const lines: TodoViewLine[] = [
+		{
+			state: "progress",
+			text: `📋 ${completed}/${total}  [${"█".repeat(filled)}${"░".repeat(barWidth - filled)}] ${pct}%`,
+		},
+	];
+
+	const currentIdx = todos.findIndex((t) => !t.completed);
+	const allDone = currentIdx === -1;
+	if (allDone) {
+		lines.push({ state: "info", text: "✅ 计划完成" });
+	}
+
+	const budget = Math.max(0, maxLines - lines.length);
+	const shown = todos.slice(0, budget);
+	shown.forEach((t, i) => {
+		const isCurrent = i === currentIdx;
+		lines.push({
+			state: t.completed ? "done" : isCurrent ? "current" : "pending",
+			text: `${t.step}. ${t.text}`,
+		});
+	});
+	if (total > budget) {
+		lines.push({ state: "info", text: `⋯ 还有 ${total - budget} 步` });
+	}
+	return lines;
+}

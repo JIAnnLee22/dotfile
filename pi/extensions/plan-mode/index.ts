@@ -39,7 +39,14 @@ import {
 	type AmbiguityQuestion,
 	type AmbiguityResolution,
 } from "./ambiguity.ts";
-import { extractTodoItems, markCompletedSteps, type TodoItem } from "./plan.ts";
+import {
+	extractTodoItems,
+	markCompletedSteps,
+	buildTodoView,
+	type TodoItem,
+	type TodoViewLine,
+} from "./plan.ts";
+import { patchTopWidgetPlacement, setTopWidgetVisible } from "./top-widget.ts";
 
 // ---------- 常量 ----------
 
@@ -83,6 +90,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	/** fallback 处理中（防重入/重复询问） */
 	let handlingAmbiguity = false;
 
+	// 把扩展 widget 容器提升到 fullscreen 布局顶部（幂等，上游结构变化时自动跳过）
+	void patchTopWidgetPlacement();
+
 	pi.registerFlag("plan", {
 		description: "Start in plan mode (read-only exploration with ambiguity handling)",
 		type: "boolean",
@@ -122,6 +132,26 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		} satisfies PlanModeState);
 	}
 
+	/** 按 state 应用颜色（顶部 widget 行） */
+	function styleTodoLines(theme: ExtensionContext["ui"]["theme"], lines: TodoViewLine[]): string[] {
+		return lines.map((line) => {
+			switch (line.state) {
+				case "progress":
+					return theme.fg("success", line.text);
+				case "done":
+					return theme.fg("success", "☑ ") + theme.fg("muted", theme.strikethrough(line.text));
+				case "current":
+					return theme.fg("accent", "▶ ") + theme.fg("accent", theme.bold(line.text));
+				case "pending":
+					return theme.fg("muted", "☐ ") + line.text;
+				case "planning":
+					return theme.fg("warning", line.text);
+				default:
+					return theme.fg("dim", line.text);
+			}
+		});
+	}
+
 	function updateStatus(ctx: ExtensionContext): void {
 		if (phase === "executing" && todoItems.length > 0) {
 			const completed = todoItems.filter((t) => t.completed).length;
@@ -132,20 +162,21 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			ctx.ui.setStatus("plan-mode", undefined);
 		}
 
-		if (phase === "executing" && todoItems.length > 0) {
-			const lines = todoItems.map((item) => {
-				if (item.completed) {
-					return (
-						ctx.ui.theme.fg("success", "☑ ") +
-						ctx.ui.theme.fg("muted", ctx.ui.theme.strikethrough(item.text))
-					);
-				}
-				return `${ctx.ui.theme.fg("muted", "☐ ")}${item.text}`;
-			});
-			ctx.ui.setWidget("plan-todos", lines);
+		// 顶部 widget（布局已提升到 transcript 上方，见 top-widget.ts）
+		const lines = buildTodoView(phase, todoItems);
+		setTopWidgetVisible(lines.length > 0);
+		if (lines.length === 0) {
+			ctx.ui.setWidget("plan-todos-top", undefined);
+		} else if (ctx.hasUI) {
+			ctx.ui.setWidget("plan-todos-top", (_tui, theme) => ({
+				render: () => styleTodoLines(theme, lines),
+				invalidate: () => {},
+			}));
 		} else {
-			ctx.ui.setWidget("plan-todos", undefined);
+			ctx.ui.setWidget("plan-todos-top", lines.map((l) => l.text));
 		}
+		// 旧底部 widget 不再使用，显式清理
+		ctx.ui.setWidget("plan-todos", undefined);
 	}
 
 	function togglePlanMode(ctx: ExtensionContext): void {
