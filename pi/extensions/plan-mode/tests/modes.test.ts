@@ -4,19 +4,21 @@ import type { ActorChannel } from "../src/domain.ts";
 import { draft, environment, fixture, modelActor, request } from "./helpers.ts";
 
 for (const channel of ["tui", "print", "json", "rpc"] satisfies ActorChannel[]) {
-	test(`PM-P0-011 ${channel} uses the same exact PlanRef approval protocol`, async () => {
+	test(`PM-P0-011 ${channel} uses the same one-action exact PlanRef run protocol`, async () => {
 		const f = await fixture();
 		try {
 			const actor = { channel, id: `${channel}-client` } as const;
 			await f.controller.dispatch(request("start", undefined, actor), environment(f.scope, { goal: draft.goal }));
 			await f.controller.dispatch(request("submit", undefined, modelActor), environment(f.scope, { draft }));
-			const missing = await f.controller.dispatch(request("approve", undefined, actor), environment(f.scope));
+			const missing = await f.controller.dispatch(request("run", undefined, actor), environment(f.scope));
 			assert.equal(missing.ok, false);
 			assert.equal(missing.error?.code, "PLAN_REF_MISMATCH");
 			const ref = f.controller.state.planRef!;
-			const approved = await f.controller.dispatch(request("approve", ref, actor), environment(f.scope));
-			assert.equal(approved.ok, true);
-			assert.equal(approved.state.status, "approved");
+			const running = await f.controller.dispatch(request("run", ref, actor), environment(f.scope));
+			assert.equal(running.ok, true);
+			assert.equal(running.state.status, "executing");
+			assert.ok(running.approvalRef);
+			assert.ok(running.grantRef);
 		} finally {
 			await f.cleanup();
 		}

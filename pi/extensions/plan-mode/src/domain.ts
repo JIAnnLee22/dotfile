@@ -18,7 +18,7 @@ export type PlanStatus =
 	| "stale"
 	| "failed";
 
-export type Capability = "fs.read" | "fs.write";
+export type Capability = "fs.read" | "fs.write" | "process.exec";
 
 export type ActorChannel = "model" | "tui" | "print" | "json" | "rpc" | "sdk" | "cli" | "system";
 
@@ -207,7 +207,9 @@ export type PlanAction =
 	| "diff"
 	| "edit"
 	| "approve"
+	| "run"
 	| "execute"
+	| "complete_step"
 	| "reject"
 	| "pause"
 	| "resume"

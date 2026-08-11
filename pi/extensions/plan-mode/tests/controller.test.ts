@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import test from "node:test";
 import { actor, draft, environment, fixture, modelActor, request } from "./helpers.ts";
 
-test("PM-P0-005 PM-P0-006 PM-P0-007 PM-P0-008 full flow keeps spec, approval, grant and execution state separate", async () => {
+test("PM-P0-005 PM-P0-006 PM-P0-007 PM-P0-008 one run action keeps spec, approval, grant and execution state separate", async () => {
 	const f = await fixture();
 	try {
 		assert.equal((await f.controller.dispatch(request("start"), environment(f.scope, { goal: draft.goal }))).ok, true);
@@ -20,27 +20,34 @@ test("PM-P0-005 PM-P0-006 PM-P0-007 PM-P0-008 full flow keeps spec, approval, gr
 		assert.equal(onDisk.contentHash, ref.contentHash);
 		assert.match(await fs.readFile(paths.review, "utf8"), /spec\.json.*authoritative/);
 
-		assert.equal((await f.controller.dispatch(request("approve", ref), environment(f.scope))).ok, true);
-		assert.equal(f.controller.state.status, "approved");
-		assert.ok(f.controller.approval);
-		assert.equal(f.controller.grant, undefined);
-
-		assert.equal((await f.controller.dispatch(request("execute", ref), environment(f.scope))).ok, true);
+		assert.equal((await f.controller.dispatch(request("run", ref), environment(f.scope))).ok, true);
 		assert.equal(f.controller.state.status, "executing");
-		assert.ok(f.controller.grant);
+		assert.ok(f.controller.approval, "one run action creates the internal ApprovalRecord");
+		assert.ok(f.controller.grant, "one run action also activates the internal ExecutionGrant");
 		assert.equal(f.controller.grant?.planRef.contentHash, ref.contentHash);
 
 		await f.controller.recordToolResult({ channel: "system", id: "tool" }, f.scope, {
+			toolName: "read",
+			toolCallId: "call-read",
+			success: true,
+			summary: "read succeeded; body redacted",
+		});
+		await f.controller.recordToolResult({ channel: "system", id: "tool" }, f.scope, {
 			toolName: "edit",
-			toolCallId: "call-1",
+			toolCallId: "call-edit",
 			success: true,
 			summary: "edit succeeded; body redacted",
 		});
-		assert.equal(f.controller.state.steps.S1.status, "running", "tool success alone must not verify a step");
-		assert.equal(f.controller.state.steps.S1.evidenceIds.length, 1);
+		assert.equal(f.controller.state.steps.S1.status, "running", "tool success alone does not advance the Todo");
+		assert.equal(f.controller.state.steps.S1.evidenceIds.length, 2);
 
 		assert.equal(
-			(await f.controller.dispatch(request("verify", ref), environment(f.scope, { stepId: "S1", note: "Reviewed diff manually" }))).ok,
+			(
+				await f.controller.dispatch(
+					request("complete_step", ref, modelActor),
+					environment(f.scope, { stepId: "S1", note: "Read the target and applied the approved edit" }),
+				)
+			).ok,
 			true,
 		);
 		assert.equal(f.controller.state.status, "completed");
@@ -101,7 +108,7 @@ test("PM-P0-006 editing creates a new version and invalidates old approval/hash"
 	}
 });
 
-test("PM-P0-006 model cannot approve or verify its own plan", async () => {
+test("PM-P0-006 model cannot approve or provide manual verification for its own plan", async () => {
 	const f = await fixture();
 	try {
 		await f.controller.dispatch(request("start"), environment(f.scope, { goal: draft.goal }));
@@ -111,6 +118,38 @@ test("PM-P0-006 model cannot approve or verify its own plan", async () => {
 		assert.equal(approval.ok, false);
 		assert.equal(approval.error?.code, "APPROVAL_REQUIRED");
 		assert.equal(f.controller.state.status, "review");
+		await f.controller.dispatch(request("run", ref), environment(f.scope));
+		const manualVerification = await f.controller.dispatch(
+			request("verify", ref, modelActor),
+			environment(f.scope, { stepId: "S1", note: "Trust my free-text claim" }),
+		);
+		assert.equal(manualVerification.ok, false);
+		assert.equal(manualVerification.error?.code, "APPROVAL_REQUIRED");
+	} finally {
+		await f.cleanup();
+	}
+});
+
+test("PM-P0-008 managed step completion requires successful evidence for every declared capability", async () => {
+	const f = await fixture();
+	try {
+		await f.controller.dispatch(request("start"), environment(f.scope, { goal: draft.goal }));
+		await f.controller.dispatch(request("submit", undefined, modelActor), environment(f.scope, { draft }));
+		const ref = f.controller.state.planRef!;
+		await f.controller.dispatch(request("run", ref), environment(f.scope));
+		await f.controller.recordToolResult({ channel: "system", id: "tool" }, f.scope, {
+			toolName: "read",
+			toolCallId: "call-read",
+			success: true,
+			summary: "read succeeded",
+		});
+		const incomplete = await f.controller.dispatch(
+			request("complete_step", ref, modelActor),
+			environment(f.scope, { note: "Only inspected the file" }),
+		);
+		assert.equal(incomplete.ok, false);
+		assert.match(incomplete.error?.message ?? "", /fs\.write/);
+		assert.equal(f.controller.state.status, "executing");
 	} finally {
 		await f.cleanup();
 	}

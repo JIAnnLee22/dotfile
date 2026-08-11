@@ -7,7 +7,7 @@ import { samePlanRef } from "./domain.ts";
 
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const WRITE_TOOLS = new Set(["edit", "write"]);
-const ALWAYS_DENIED_TOOLS = new Set(["bash"]);
+const PROCESS_TOOLS = new Set(["bash"]);
 
 export interface ToolInfoLike {
 	readonly name: string;
@@ -21,7 +21,7 @@ export interface ToolInfoLike {
 
 export interface PolicyDecision {
 	readonly allow: boolean;
-	readonly capability?: "fs.read" | "fs.write" | "managed-write";
+	readonly capability?: "fs.read" | "fs.write" | "process.exec" | "managed-write";
 	readonly reason: string;
 	readonly normalizedPath?: string;
 }
@@ -116,10 +116,6 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 	const { state, toolName } = context;
 	if (state.status === "inactive") return { allow: true, reason: "Plan Mode is inactive" };
 
-	if (ALWAYS_DENIED_TOOLS.has(toolName)) {
-		return deny("P0 policy denies model bash/process execution in every Plan Mode state");
-	}
-
 	const managedTool = context.managedTools?.find((candidate) => candidate.name === toolName);
 	if (managedTool) {
 		if (!validManagedToolSource(context.toolInfo, managedTool)) {
@@ -130,7 +126,9 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 				? new Set(["researching", "review", "stale"]).has(state.status)
 				: toolName === "plan_question"
 					? state.status === "researching"
-					: false;
+					: toolName === "plan_step_complete" || toolName === "plan_blocked"
+						? state.status === "executing"
+						: false;
 		if (!validState) return deny(`Managed tool '${toolName}' is not allowed while state=${state.status}`);
 		return { allow: true, capability: "managed-write", reason: `Trusted managed tool '${toolName}'` };
 	}
@@ -208,12 +206,47 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 			: deny(`Write path is outside the current step grant: ${target}`);
 	}
 
+	if (PROCESS_TOOLS.has(toolName)) {
+		if (!isExpectedBuiltin(toolName, context.toolInfo)) {
+			return deny(`Process tool '${toolName}' is unknown or overrides the built-in implementation`);
+		}
+		if (state.status !== "executing") return deny(`Process execution denied while state=${state.status}`);
+		if (!context.spec || !context.grant || !state.planRef) return deny("Executing state is missing PlanSpec or ExecutionGrant");
+		if (!samePlanRef(state.planRef, context.spec) || !samePlanRef(state.planRef, context.grant.planRef)) {
+			return deny("ExecutionGrant PlanRef does not match current immutable PlanSpec");
+		}
+		if (context.grant.epoch !== state.epoch || context.grant.grantId !== state.grantId) {
+			return deny("ExecutionGrant epoch or identifier is stale");
+		}
+		if (context.grant.policyDigest !== context.spec.policyDigest || context.grant.contextDigest !== context.spec.contextDigest) {
+			return deny("ExecutionGrant policy/context digest does not match PlanSpec");
+		}
+		if (context.spec.workspaceSnapshot && context.grant.workspaceDigest !== context.spec.workspaceSnapshot.digest) {
+			return deny("ExecutionGrant workspace digest does not match PlanSpec dependency snapshot");
+		}
+		if (context.grant.expiresAt && Date.parse(context.grant.expiresAt) <= Date.parse(context.now ?? new Date().toISOString())) {
+			return deny("ExecutionGrant has expired");
+		}
+		if (!state.currentStepId) return deny("No current plan step is selected");
+		const step = context.spec.steps.find((candidate) => candidate.id === state.currentStepId);
+		const grantStep = context.grant.steps.find((candidate) => candidate.stepId === state.currentStepId);
+		if (!step || !grantStep) return deny("Current step is absent from PlanSpec or ExecutionGrant");
+		if (!step.requiredCapabilities.includes("process.exec") || !grantStep.capabilities.includes("process.exec")) {
+			return deny(`Current step '${state.currentStepId}' does not grant process.exec`);
+		}
+		return {
+			allow: true,
+			capability: "process.exec",
+			reason: `ExecutionGrant permits unrestricted built-in process execution for step '${state.currentStepId}'`,
+		};
+	}
+
 	return deny(`Unknown or unsupported tool '${toolName}' is fail-closed`);
 }
 
 export function calculatePolicyDigest(tools: readonly ToolInfoLike[], managedSubmitSourcePath?: string): string {
 	const relevant = tools
-		.filter((tool) => READ_TOOLS.has(tool.name) || WRITE_TOOLS.has(tool.name) || ALWAYS_DENIED_TOOLS.has(tool.name))
+		.filter((tool) => READ_TOOLS.has(tool.name) || WRITE_TOOLS.has(tool.name) || PROCESS_TOOLS.has(tool.name))
 		.map((tool) => ({
 			name: tool.name,
 			sourceInfo: tool.sourceInfo
@@ -223,8 +256,8 @@ export function calculatePolicyDigest(tools: readonly ToolInfoLike[], managedSub
 		.sort((left, right) => left.name.localeCompare(right.name));
 	return sha256(
 		canonicalJson({
-			policy: "pi-plan-mode/p0-strict-v1",
-			bash: "deny",
+			policy: "pi-plan-mode/approved-step-v2",
+			bash: "deny-during-planning; allow-only-with-process.exec-grant",
 			network: "deny",
 			unknown: "deny",
 			managedSubmitSourcePath: managedSubmitSourcePath ?? null,

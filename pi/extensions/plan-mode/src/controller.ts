@@ -14,6 +14,7 @@ import {
 	type Actor,
 	type ApprovalRecord,
 	type AuditDecision,
+	type Capability,
 	type AuditEvent,
 	type EvidenceRecord,
 	type ExecutionGrant,
@@ -98,6 +99,12 @@ function stepProjection(spec: PlanSpec): Record<string, StepExecutionState> {
 function isDraft(value: unknown): value is PlanDraft {
 	return value !== null && typeof value === "object" && "goal" in value && "steps" in value && Array.isArray((value as PlanDraft).steps);
 }
+
+const CAPABILITY_EVIDENCE_TOOLS: Readonly<Record<Capability, ReadonlySet<string>>> = {
+	"fs.read": new Set(["read", "grep", "find", "ls"]),
+	"fs.write": new Set(["edit", "write"]),
+	"process.exec": new Set(["bash"]),
+};
 
 function errorResult(request: PlanActionRequest, state: ExecutionState, error: unknown): PlanActionResult {
 	const normalized =
@@ -217,7 +224,7 @@ export class PlanController {
 
 	private requireTrustedActor(actor: Actor): void {
 		if (!trustedApprovalActor(actor)) {
-			throw new PlanControllerError("APPROVAL_REQUIRED", "The model or system actor cannot approve, execute or verify its own plan");
+			throw new PlanControllerError("APPROVAL_REQUIRED", "The model or system actor cannot approve, execute or provide manual verification for its own plan");
 		}
 	}
 
@@ -452,6 +459,14 @@ export class PlanController {
 		this.grantValue = grant;
 	}
 
+	private async approveAndExecute(request: PlanActionRequest, environment: ActionEnvironment): Promise<void> {
+		if (this.stateValue.status === "review") await this.approve(request, environment);
+		if (this.stateValue.status !== "approved" && this.stateValue.status !== "paused") {
+			throw new PlanControllerError("INVALID_STATE", `Plan cannot run while state=${this.stateValue.status}`);
+		}
+		await this.issueGrant(request, environment);
+	}
+
 	private async pause(request: PlanActionRequest, environment: ActionEnvironment): Promise<void> {
 		if (this.stateValue.status !== "executing") throw new PlanControllerError("INVALID_STATE", "Only executing plans can be paused");
 		const next: ExecutionState = {
@@ -501,32 +516,31 @@ export class PlanController {
 			throw new PlanControllerError("INVALID_STATE", "Reset is allowed only from completed, rejected, cancelled or failed state");
 		}
 		const next = { ...createInitialState(this.now(), environment.scope.ephemeralSession), epoch: this.stateValue.epoch + 1 };
-		await this.commitState(next, request.actor, environment.scope, "Explicit reset returned Plan Mode to inactive");
+		await this.commitState(next, request.actor, environment.scope, "Reset returned Plan Mode to inactive");
 		this.specValue = undefined;
 		this.approvalValue = undefined;
 		this.grantValue = undefined;
 		this.evidence.clear();
 	}
 
-	private async verify(request: PlanActionRequest, environment: ActionEnvironment): Promise<void> {
-		if (this.stateValue.status !== "executing" || !this.stateValue.planRef || !this.specValue) {
-			throw new PlanControllerError("INVALID_STATE", "Step verification requires an executing plan");
-		}
-		this.requireTrustedActor(request.actor);
-		const stepId = environment.stepId ?? this.stateValue.currentStepId;
-		if (!stepId || stepId !== this.stateValue.currentStepId || !this.stateValue.steps[stepId]) {
-			throw new PlanControllerError("INVALID_ACTION", "Only the current step can be verified");
-		}
+	private async commitStepCompletion(
+		request: PlanActionRequest,
+		environment: ActionEnvironment,
+		stepId: string,
+		kind: "verification" | "user-confirmation",
+		summary: string,
+	): Promise<void> {
+		if (!this.stateValue.planRef || !this.specValue) throw new PlanControllerError("INVALID_STATE", "No executing PlanSpec is loaded");
 		const evidence: EvidenceRecord = {
 			schema: "dev.pi.plan-evidence/v1",
 			evidenceId: this.id(),
 			planRef: this.stateValue.planRef,
 			stepId,
-			kind: "user-confirmation",
+			kind,
 			actor: request.actor,
 			recordedAt: this.now(),
 			success: true,
-			summary: auditSummary(environment.note, "Explicit user confirmation"),
+			summary,
 		};
 		await this.appendAudit("evidence-recorded", request.actor, environment.scope, { decision: "allow", data: evidence });
 		this.evidence.set(evidence.evidenceId, evidence);
@@ -542,10 +556,54 @@ export class PlanController {
 			grantId: completed ? undefined : this.stateValue.grantId,
 			currentStepId: nextStep?.id,
 			steps,
-			reason: completed ? "All plan steps explicitly verified" : `Step ${stepId} verified`,
+			reason: completed ? "All plan steps completed with evidence" : `Step ${stepId} completed with evidence`,
 		};
-		await this.commitState(next, request.actor, environment.scope, next.reason ?? "Step verified");
+		await this.commitState(next, request.actor, environment.scope, next.reason ?? "Step completed");
 		if (completed) this.grantValue = undefined;
+	}
+
+	private async completeStep(request: PlanActionRequest, environment: ActionEnvironment): Promise<void> {
+		if (this.stateValue.status !== "executing" || !this.specValue || request.actor.channel !== "model") {
+			throw new PlanControllerError("INVALID_STATE", "Only the executing model can complete the current step through the managed tool");
+		}
+		const stepId = environment.stepId ?? this.stateValue.currentStepId;
+		const step = this.specValue.steps.find((candidate) => candidate.id === stepId);
+		if (!stepId || stepId !== this.stateValue.currentStepId || !step || !this.stateValue.steps[stepId]) {
+			throw new PlanControllerError("INVALID_ACTION", "Only the current step can be completed");
+		}
+		const note = environment.note?.trim();
+		if (!note) throw new PlanControllerError("INVALID_ACTION", "A concise completion summary is required");
+		const toolEvidence = this.stateValue.steps[stepId].evidenceIds
+			.map((id) => this.evidence.get(id))
+			.filter((evidence): evidence is EvidenceRecord => evidence?.kind === "tool-result" && evidence.success);
+		if (toolEvidence.length === 0) {
+			throw new PlanControllerError("INVALID_ACTION", `Step ${stepId} has no successful tool evidence`);
+		}
+		const missing = step.requiredCapabilities.filter(
+			(capability) => !toolEvidence.some((evidence) => evidence.toolName && CAPABILITY_EVIDENCE_TOOLS[capability].has(evidence.toolName)),
+		);
+		if (missing.length > 0) {
+			throw new PlanControllerError("INVALID_ACTION", `Step ${stepId} lacks successful evidence for: ${missing.join(", ")}`);
+		}
+		await this.commitStepCompletion(request, environment, stepId, "verification", auditSummary(note, "Structured agent completion"));
+	}
+
+	private async verify(request: PlanActionRequest, environment: ActionEnvironment): Promise<void> {
+		if (this.stateValue.status !== "executing" || !this.stateValue.planRef || !this.specValue) {
+			throw new PlanControllerError("INVALID_STATE", "Step verification requires an executing plan");
+		}
+		this.requireTrustedActor(request.actor);
+		const stepId = environment.stepId ?? this.stateValue.currentStepId;
+		if (!stepId || stepId !== this.stateValue.currentStepId || !this.stateValue.steps[stepId]) {
+			throw new PlanControllerError("INVALID_ACTION", "Only the current step can be verified");
+		}
+		await this.commitStepCompletion(
+			request,
+			environment,
+			stepId,
+			"user-confirmation",
+			auditSummary(environment.note, "Explicit user confirmation"),
+		);
 	}
 
 	private async diffVersions(environment: ActionEnvironment): Promise<PlanDiff> {
@@ -581,9 +639,13 @@ export class PlanController {
 				return this.submit(request, environment);
 			case "approve":
 				return this.approve(request, environment);
+			case "run":
+				return this.approveAndExecute(request, environment);
 			case "execute":
 			case "resume":
 				return this.issueGrant(request, environment);
+			case "complete_step":
+				return this.completeStep(request, environment);
 			case "pause":
 				return this.pause(request, environment);
 			case "reject":

@@ -1,10 +1,10 @@
-# Pi Coding Agent Plan Mode 产品需求文档（方案 A v0.2）
+# Pi Coding Agent Plan Mode 产品需求文档（方案 A v0.3）
 
 ## 元数据
 
 | 字段 | 内容 |
 |---|---|
-| 文档状态 | v0.2 实施基线 |
+| 文档状态 | v0.3 简化交互实施基线 |
 | 方案定位 | 产品与交互导向、稳健 MVP、扩展优先 |
 | 目标版本 | Plan Mode Extension v0.1–v1.0 |
 | 优先交付形态 | 配置仓库中自动发现的 TypeScript Extension |
@@ -16,21 +16,22 @@
 
 ## 摘要
 
-本方案为 Pi 提供完整的“调研—澄清—成文—审阅—批准—执行—恢复—完成”计划工作流，同时维持 Pi 的 minimal core 与 extension-first 原则。Pi README 明确表示核心保持最小化，plan mode 应通过文件、扩展或第三方 package 实现；发行包也已经附带 `examples/extensions/plan-mode/` 示例。因此本需求不是从零开发 Plan Mode，而是基于现有示例进行缺口分析和产品化。
+本方案为 Pi 提供用户可见仅包含“进入规划—必要澄清—审阅计划—一次确认—连续执行到完成”的计划工作流，同时维持 Pi 的 minimal core 与 extension-first 原则。版本、hash、审批记录、执行 grant、证据和恢复状态仍由扩展在后台维护，不得要求普通用户逐项理解或操作。Pi README 明确表示核心保持最小化，plan mode 应通过文件、扩展或第三方 package 实现；发行包也已经附带 `examples/extensions/plan-mode/` 示例。因此本需求不是从零开发 Plan Mode，而是基于现有示例进行产品化。
 
 MVP 直接放入配置仓库的 `extensions/plan-mode/`，由 Pi 的用户级 Extension 自动发现机制加载；暂不增加独立 Pi Package。实现利用 `pi.registerCommand()`、`pi.registerFlag()`、`pi.setActiveTools()`、`tool_call`、`before_agent_start`、`session_start`、`session_before_tree`、`session_before_compact`、`pi.appendEntry()` 与 `ctx.ui`。只有扩展 API 无法可靠保证的通用机制，例如可证明不可绕过的进程级只读执行策略，才考虑最小核心增强。
 
-## v0.2 已确认决策
+## v0.3 已确认决策
 
 1. 方案 A 是产品与 MVP 的唯一主基线；方案 B 只提供状态机、安全、持久化和测试补充。
 2. MVP 的安全承诺为 `agent-tools-only`：它约束可信扩展集合中的模型工具调用，不宣称约束恶意扩展、扩展直接 Node I/O、`pi.exec()`、用户 `!`/`!!` 或 RPC 直接 `bash`。
 3. 权威模型分为不可变 `PlanSpec`、不可变 `ApprovalRecord`、不可变 `ExecutionGrant`、事件派生的 `ExecutionState` 和 append-only `AuditEvent`，不得把审批或执行进度嵌入 `PlanSpec`。
-4. 批准不恢复普通模式；执行只获得按计划步骤、能力和规范化路径收窄的 `ExecutionGrant`。`setActiveTools()`只降低可见性，最终门禁在每次 `tool_call`。
+4. 用户的一次“执行计划”确认在 controller 内依次创建 `ApprovalRecord` 和 `ExecutionGrant`；二者仍保持独立，批准本身不等于恢复普通模式。执行按计划步骤、能力和规范化路径收窄，`setActiveTools()`只降低可见性，最终门禁在每次 `tool_call`。
 5. Canonical JSON 是权威计划工件；Markdown 是供人审阅的确定性投影。任何编辑都创建新版本并使旧批准及 grant 失效。
-6. P0 的模型 `bash` 与网络能力全部禁用，未知、自定义和参数无法验证的工具 fail-closed。
+6. 规划阶段禁用模型 `bash` 与网络能力；用户确认后，仅当前步骤显式声明 `process.exec` 时开放来源可验证的内置 `bash`。该授权不解析 shell、不提供路径或网络沙箱，命令可调用网络程序，审批 UI 必须明确提示其使用用户进程权限。未知、自定义和参数无法验证的工具仍 fail-closed。
 7. 工件默认存入用户目录；只有可信项目和显式导出操作才写 `.pi/plans/`。
 8. Print/JSON 通过显式 CLI action flags 工作；RPC MVP 通过 extension command 与现有 UI 协议工作。所有适配器调用同一个结构化 controller。
 9. Extension-only 无法实现全进程不可绕过策略；统一 execution-policy hook 作为独立核心增强提案，不阻塞 Extension MVP。
+10. 用户默认不执行 `approve → execute → verify-step → reset` 命令链：计划提交后立即展示一次执行确认；模型通过受管、证据约束的步骤完成工具推进 Todo；未完成时自动续跑，完成后自动清理并恢复普通工具。高级命令只保留为恢复、诊断和非交互适配器接口。
 
 ## 背景、现状与示例缺口
 
@@ -120,15 +121,15 @@ MVP 直接放入配置仓库的 `extensions/plan-mode/`，由 Pi 的用户级 Ex
 
 ### P0
 
-- **PM-P0-001**（原 P0-01）：提供 `/plan [goal]` 与 `--plan`；进入时保存可见工具基线并切换至 planning-safe 集合。
+- **PM-P0-001**（原 P0-01）：提供 `/plan [goal]` 与 `--plan`；inactive 状态下，TUI/RPC 的裸 `/plan` 必须提示输入目标、进入调研并将目标作为真实用户消息触发模型回合，Print/JSON 的裸 `/plan` 必须返回稳定 `UI_REQUIRED` 并提示使用 `/plan <goal>`；进入时保存可见工具基线并切换至 planning-safe 集合。
 - **PM-P0-002**（原 P0-02）：planning/review 默认仅允许包内固定适配器确认的 `read`、`grep`、`find`、`ls`；未知、同名覆盖、声明冲突和参数无法验证的工具失败关闭。
-- **PM-P0-003**（原 P0-03）：P0 全阶段禁用模型 `bash` 与网络能力；不得以 shell 正则或工具名称作为最终授权依据。
+- **PM-P0-003**（原 P0-03）：planning/review 阶段禁用模型 `bash` 与网络能力；executing 仅在当前获批步骤同时声明并获得 `process.exec` grant 时允许来源可验证的内置 `bash`。该进程可产生文件、子进程和网络副作用，不得把 shell 正则判断包装成路径/网络沙箱或只读保证。
 - **PM-P0-004**（原 P0-04）：支持澄清问题；无 UI 时返回结构化 `awaiting_input`，不得擅自采用高影响假设。
 - **PM-P0-005**（原 P0-05）：模型通过结构化受管接口提交 `PlanSpec`；扩展生成 canonical JSON 和 Markdown 投影，不解析自由文本 `Plan:` 作为权威计划。
-- **PM-P0-006**（原 P0-06）：提供 show/edit/approve/reject；批准创建独立 `ApprovalRecord` 并绑定精确 `PlanRef`、主体、通道、时间、nonce 和分支锚点。
-- **PM-P0-007**（原 P0-07）：批准不恢复普通模式；execute 重新校验后签发受步骤、能力、路径和 epoch 限制的 `ExecutionGrant`。
-- **PM-P0-008**（原 P0-08）：步骤完成由成功工具结果、验证结果或显式用户确认形成证据；模型声明只能作为说明。
-- **PM-P0-009**（原 P0-09）：支持 pause/resume/cancel；转换先递增 epoch、阻止新调用并请求 abort，无法确认排空时保持最低权限。
+- **PM-P0-006**（原 P0-06）：计划提交后自动展示目标、Todos、风险、写范围和 process 警告，并只请求一次“执行此计划”确认；确认在内部创建独立 `ApprovalRecord`，绑定精确 `PlanRef`、主体、通道、时间、nonce 和分支锚点。
+- **PM-P0-007**（原 P0-07）：同一次用户确认在 approval 成功后重新校验并签发受步骤、能力、路径和 epoch 限制的 `ExecutionGrant`，直接进入 executing；中间内部状态不得转化为第二次用户操作。
+- **PM-P0-008**（原 P0-08）：模型通过受管 `plan_step_complete` 推进当前 Todo；controller 仅在每项声明能力均已有对应成功工具结果时接受，并追加独立 verification evidence。普通步骤不要求用户逐项确认，模型自由文本或 `[DONE:n]` 仍不能改变状态。
+- **PM-P0-009**（原 P0-09）：支持 pause/resume/cancel；模型发现真实阻塞、范围变化或新增高风险决策时通过受管 `plan_blocked` 立即 pause。执行未完成而 agent 回合意外结束时自动触发后续回合，连续两次自动续跑无新增工具证据也视为阻塞并 pause，避免无限循环。转换先递增 epoch、阻止新调用并请求 abort，无法确认排空时保持最低权限。
 - **PM-P0-010**（原 P0-10）：以 `pi.appendEntry()`追加工件提交、状态提交和审计事件，只从当前 `getBranch()`重建；尾部未提交事务必须忽略。
 - **PM-P0-011**（原 P0-11）：TUI、Print、JSON、RPC 使用统一 action/result/error 协议；无 UI、超时、取消和断连不得隐式批准。
 - **PM-P0-012**（原 P0-12）：每次权限转换、批准、拒绝、grant、步骤证据、策略判定、迁移和恢复均生成脱敏 `AuditEvent`。
@@ -152,17 +153,13 @@ MVP 直接放入配置仓库的 `extensions/plan-mode/`，由 Pi 的用户级 Ex
 
 ## 详细 UX
 
-1. **进入**：用户执行 `/plan [goal]`、`--plan`或快捷键。状态栏显示“PLAN · READ ONLY”，并展示允许工具摘要。
-2. **调研**：代理读取、搜索代码；被拦截工具显示原因、策略来源和替代方式。
-3. **澄清**：关键决策通过 `ctx.ui.select/input/editor` 提问；RPC 使用 `extension_ui_request`；无 UI 则停止在 `awaiting_input`。
-4. **生成**：代理提交结构化计划，扩展渲染并保存 Markdown 工件。
-5. **编辑**：TUI 用 `ctx.ui.editor()`；亦可外部编辑文件。任何变化创建新版本并撤销旧批准。
-6. **批准**：显示目标、步骤数、风险、预计修改文件、验证及 grant 范围；用户明确确认后创建独立 `ApprovalRecord`。
-7. **拒绝**：保留工件，记录理由，回到调研或结束；不得签发 grant。
-8. **执行**：重新校验 `PlanRef` 后签发 `ExecutionGrant`，只暴露并允许当前步骤所需工具；widget 展示进行中、完成、阻塞和证据。
-9. **暂停**：递增 epoch、禁止新变更调用、请求 abort 并保留检查点；恢复时签发新 grant。
-10. **恢复**：校验分支、工件哈希、策略和工作区漂移；异常或上次处于 executing 时进入 stale。
-11. **完成**：全部必要步骤有证据且验证通过后标记完成，输出变更、测试、偏差和未决事项。
+1. **进入**：用户执行 `/plan [goal]`、`--plan`或快捷键。inactive 状态下，TUI/RPC 的裸 `/plan` 与快捷键只询问目标；状态转换成功后，扩展将目标作为真实用户消息发送并立即触发模型回合。已有计划时裸 `/plan` 查询状态，避免意外取消。状态栏显示“PLAN · READ ONLY”。
+2. **调研与澄清**：代理只读检索；只有会实质改变方案的歧义才通过 `ctx.ui.select/input/editor` 提问。RPC 使用 `extension_ui_request`；无 UI 则进入 `awaiting_input`，不得猜测高影响决策。
+3. **生成与确认**：代理提交结构化计划，扩展保存工件、展示可读 Todo 树、风险及 process 警告，并只询问一次“执行此计划？”。编辑或取消属于该确认的替代路径，不新增审批阶段。
+4. **连续执行**：确认后 controller 内部完成 approve+grant，立即执行第一项 Todo。`plan_step_complete` 在已有对应成功工具证据时自动推进下一项；agent 不得为普通步骤要求用户确认。回合提前结束时扩展自动续跑。
+5. **进度**：widget 多行展示 `completed / in progress / pending / failed` 计数及 Todo 树；内部 PlanRef、hash、grantId 和 epoch 不进入默认 UI。
+6. **暂停与阻塞**：用户可随时 pause/cancel；范围变化、漂移、不可恢复错误或连续两次续跑无证据进展时暂停并说明原因。恢复只需一次确认并签发新 grant。
+7. **完成**：全部 Todo 有能力匹配的成功工具证据和结构化完成记录后标记完成；代理输出变更、测试、偏差和未决事项，`agent_end` 自动 reset 并恢复进入 plan 前的普通工具。
 
 ## 状态机
 
@@ -178,7 +175,8 @@ review → rejected
 任意非终态 → cancelled
 approved/executing/paused → stale → review
 任意非终态 → failed
-rejected|cancelled|failed|completed → inactive（仅显式 reset）
+completed → inactive（`agent_end` 自动 reset；显式 reset 仅作后备）
+rejected|cancelled|failed → inactive（显式 reset）
 ```
 
 | 当前状态 | 事件 | 新状态 | 必要条件与权限结果 |
@@ -187,9 +185,9 @@ rejected|cancelled|failed|completed → inactive（仅显式 reset）
 | researching/awaiting_input | submit | review | `PlanSpec` 校验、hash 和原子落盘成功 |
 | review | revise | review | 创建新版本；清除旧 approval/grant |
 | approved/paused | edit | review | 安全降权并创建新版本；清除旧 approval/grant |
-| review | approve | approved | 主体可信且精确 `PlanRef` 匹配 |
-| approved | execute | executing | agent idle、分支/策略一致；签发新 grant |
-| executing | verify-step | executing/completed | 证据满足当前步骤；全部必需步骤通过才 completed |
+| review | run（一次用户确认） | approved → executing | 主体可信且精确 `PlanRef` 匹配；内部先提交 approval，再校验并签发 grant，不要求第二次操作 |
+| approved | execute（内部/兼容接口） | executing | agent idle、分支/策略一致；签发新 grant |
+| executing | complete-step | executing/completed | 受管调用且每项声明能力均有成功工具证据；全部 Todo 通过才 completed |
 | executing | pause | paused | epoch 递增、grant 撤销、请求 abort |
 | paused | resume | executing | 重新校验并签发新 grant，不复用旧 grant |
 | 任意非终态 | cancel | cancelled | epoch 递增、grant 撤销、保持最低权限 |
@@ -205,11 +203,11 @@ rejected|cancelled|failed|completed → inactive（仅显式 reset）
 | `read/grep/find/ls` | 允许 | 允许 | 仍受路径与项目信任约束 |
 | `edit/write` | 禁止 | 仅 grant 覆盖的步骤和路径 | 每次调用重新规范化路径并校验 epoch |
 | 未知扩展工具 | 禁止 | 禁止 | P0 不接受自声明能力；后续需可信 capability 来源 |
-| 模型 `bash` | 禁止 | 禁止 | P0 不提供 process.exec grant |
+| 模型 `bash` | 禁止 | 仅当前 grant 步骤声明 `process.exec` | 只验证内置工具来源和 grant，不声称命令只读或路径隔离 |
 | 扩展写计划目录 | 允许 | 允许 | 不作为模型通用工具暴露 |
 | 用户 `!`/`!!` | 允许但提示 | 允许 | 属于用户直接操作，不伪装为代理安全保证 |
 
-可选只读 shell 必须采用隔离执行后端或结构化 argv allowlist；禁止 `sh -c`、解释器执行、重定向、命令替换、可写网络下载、`find -exec`及可调用子进程的参数。无法判定时拒绝。正则过滤只能作为附加检测，不能作为安全边界。
+规划阶段不尝试猜测“安全 shell”，`bash` 一律不可见且被最终门禁拒绝。执行阶段的 `process.exec` 是用户对计划中该步骤的显式进程执行授权：扩展不解析 shell、不按命令推断写路径或网络目标，也不把正则过滤宣传为沙箱；确认框必须说明命令以当前用户权限运行并可能产生文件、子进程或网络副作用。若需要更强约束，应采用隔离执行后端或 OS 沙箱。
 
 ## 计划工件与独立记录 Schema
 
@@ -240,7 +238,7 @@ rejected|cancelled|failed|completed → inactive（仅显式 reset）
     "actions": ["string"],
     "dependencyScopes": ["normalized-relative-file-or-directory"],
     "pathScopes": ["normalized-relative-mutation-path"],
-    "requiredCapabilities": ["fs.read|fs.write"],
+    "requiredCapabilities": ["fs.read|fs.write|process.exec"],
     "acceptance": ["string"],
     "rollback": ["string"]
   }],
@@ -292,7 +290,7 @@ hash 对移除 `contentHash` 后的 canonical JSON 计算；对象键排序、�
 }
 ```
 
-命令包括 `/plan [goal]`、`/plan start|status|show|diff|edit|approve|execute|reject|pause|resume|verify|cancel|reset|audit|export`。`/plan diff [fromVersion] [toVersion]`默认比较当前版本与最近前序版本。approve 与 execute 必须分离；reset 是终态后唯一恢复普通工具可见性的动作。保留 `Ctrl+Alt+P`作为入口，不占用 Pi 已用于思考等级的 Shift+Tab。TUI 使用 `setStatus()`显示模式和安全等级、`setWidget()`显示步骤及证据；复杂审阅可用 `ctx.ui.custom()`，所有组件遵守 `docs/tui.md` 的宽度、主题和按键规则。
+默认入口只有 `/plan [goal]` 与 `Ctrl+Alt+P`。常用恢复/查询命令为 `/plan status|show|edit|diff|run|pause|resume|cancel|audit`；`approve|execute|verify|reset`仅作为兼容、诊断或底层适配器动作保留，不进入正常教程。`/plan diff [fromVersion] [toVersion]`默认比较当前版本与最近前序版本。TUI 使用 `setStatus()`显示阶段和安全等级、`setWidget()`显示多行 Todo 树；默认 UI 不展示 hash、grantId、epoch 等内部标识。复杂审阅可用 `ctx.ui.custom()`，所有组件遵守 `docs/tui.md` 的宽度、主题和按键规则。
 
 ## 统一 Action、Result 与 Error 协议
 
@@ -302,9 +300,9 @@ hash 对移除 `contentHash` 后的 canonical JSON 计算；对象键排序、�
 type PlanActionRequest = {
   protocolVersion: "dev.pi.plan-action/v1";
   requestId: string;
-  action: "start" | "status" | "show" | "diff" | "edit" | "approve" | "execute" |
-          "reject" | "pause" | "resume" | "verify" | "cancel" | "reset" |
-          "audit" | "export";
+  action: "start" | "status" | "show" | "diff" | "edit" | "run" | "approve" |
+          "execute" | "complete_step" | "reject" | "pause" | "resume" | "verify" |
+          "cancel" | "reset" | "audit" | "export";
   expectedPlan?: { planId: string; version: number; contentHash: string };
   actor: { channel: "tui" | "print" | "json" | "rpc" | "sdk"; id: string };
   payload?: unknown;
@@ -327,8 +325,8 @@ type PlanActionResult = {
 
 ## Interactive、Print、JSON 与 RPC 降级语义
 
-- **Interactive**：slash command、confirm/editor、状态栏和步骤 widget；TUI 可在完整展示当前 PlanRef 后省略手工输入 hash，但 controller 仍使用精确值。
-- **Print**：无隐式审批；使用 `--plan-action`、`--plan-id`、`--plan-version`、`--plan-hash`和相关字符串 flags。缺少精确引用时返回结构化错误并保持最低权限。Pi 0.84.1 的 output guard 将扩展直接输出重定向到 stderr，且公开 API 不能写 raw stdout，因此 MVP 的 action control record 明确写 stderr；stdout 保留给最终 assistant 文本。
+- **Interactive**：`plan_submit` 后直接展示可读计划并发起一次执行 confirm；controller 在后台绑定精确 PlanRef，用户不输入或查看 hash。Todo widget 持续展示进度，普通步骤由证据约束的受管工具推进。
+- **Print**：无隐式审批；使用一次 `--plan-action run` 配合 `--plan-id`、`--plan-version`、`--plan-hash`完成批准与启动。缺少精确引用时返回结构化错误并保持最低权限。Pi 0.84.1 的 output guard 将扩展直接输出重定向到 stderr，且公开 API 不能写 raw stdout，因此 MVP 的 action control record 明确写 stderr；stdout 保留给最终 assistant 文本。
 - **JSON**：与 Print 使用同一 flags；输出普通 agent 事件及可机器识别的 custom message/entry，不得向 stdout 混入非 JSON。
 - **RPC**：MVP 通过 `prompt`调用 `/plan ...` extension command，并使用 `extension_ui_request/response`；客户端不支持、超时或断连时保持 awaiting_input/review。`get_entries`提供审计查询。
 - **SDK**：P1 导出类型化 `PlanController`；MVP 可加载 extension，但不得要求 SDK 调用方解析模型文本。
@@ -346,21 +344,24 @@ Plan Mode 是可信扩展集合内的代理工具权限控制，不是系统沙�
 
 ## 可量化验收标准
 
-1. 计划模式下针对 `edit`、`write`及 30 组 shell 绕过用例，项目文件零变化。
+1. planning/review 下针对 `edit`、`write`、`bash`及 30 组 shell 绕过用例，项目文件零变化；executing 下 `bash`仅在当前获批步骤声明 `process.exec` 时可调用。
 2. 100% 未知工具在无 capability 声明时被拒绝。
 3. 计划编辑后，旧批准哈希 100% 失效。
 4. 在 `/resume`、`/tree`、`/fork`、`/clone`和 compaction 后，当前分支状态恢复正确率 100%，且 executing 不自动恢复。
 5. TUI、Print、JSON、RPC 四种模式均通过统一 action/result/error 契约测试。
-6. 无 UI 场景不存在自动批准、自动签发 grant 或自动恢复写权限。
-7. 步骤完成记录至少包含成功工具结果、验证结果或显式人工确认之一；仅 `[DONE:n]`不能改变状态。
-8. 计划生成到工件落盘成功率达到 99%，失败时不进入 approved。
-9. Extension 的加载、禁用、热重载和移除不要求修改 Pi 核心。
+6. 无 UI 场景不存在自动批准；仅携带精确 PlanRef 的显式 `run` action 可在一次调用中创建 approval 并签发 grant。
+7. 每个自动完成步骤都至少包含覆盖其全部声明能力的成功工具结果和一条结构化 verification evidence；仅模型自由文本或 `[DONE:n]`不能改变状态。
+8. TUI/RPC 正常流程从计划展示到 executing 只出现一次确认，执行各 Todo 不再出现人工 verify；未完成回合自动续跑，连续两次无证据进展后暂停。
+9. 完成后的 `agent_end` 自动 reset 并恢复 plan 前工具集，不要求用户输入 cleanup 命令。
+10. 计划生成到工件落盘成功率达到 99%，失败时不进入 approved。
+11. Extension 的加载、禁用、热重载和移除不要求修改 Pi 核心。
 
 ## 测试场景
 
-- 正常调研、两轮澄清、编辑、批准、执行和完成。
+- TUI/RPC 在 inactive 状态执行裸 `/plan`，输入目标后进入 researching，并出现对应真实用户消息及模型回合；Print/JSON 返回 `UI_REQUIRED`，显式 `/plan <goal>` 可进入。
+- 正常调研、两轮必要澄清、计划展示、一次确认、自动推进多个 Todo、最终总结和自动恢复普通工具；断言无逐步骤人工 verify。
 - 拒绝计划后继续调研，确认写工具仍禁用。
-- 尝试重定向、命令替换、`find -exec`、解释器、curl 下载及自定义变更工具。
+- planning/review 尝试重定向、命令替换、`find -exec`、解释器、curl 下载及自定义变更工具；断言全部被拒绝。executing 分别验证未声明 `process.exec` 的 bash 被拒绝、已声明步骤的内置 bash 被允许且 UI 展示非沙箱警告。
 - 批准后手工编辑计划，确认变为 stale。
 - 执行中 Escape、`/plan pause`、进程退出和 `/resume`。
 - 在计划与执行节点使用 `/tree`切换分支并返回。
@@ -375,9 +376,9 @@ Plan Mode 是可信扩展集合内的代理工具权限控制，不是系统沙�
 
 冻结 PlanSpec/ApprovalRecord/ExecutionGrant/ExecutionState/AuditEvent schema、canonical hash、状态机、epoch 并发模型、统一 action 协议和安全回归语料。
 
-### M1：严格安全 MVP
+### M1：简洁交互与安全边界 MVP
 
-发布位于 `extensions/plan-mode/` 的自动发现 Extension：结构化 plan submission、用户目录工件、显式 approve/execute、ExecutionGrant、已知内置工具最终门禁、P0 禁用 bash/network、TUI/Print/JSON/RPC 降级、基础审计。
+发布位于 `extensions/plan-mode/` 的自动发现 Extension：结构化 plan submission、用户目录工件、一次 run 确认、后台 ApprovalRecord/ExecutionGrant、证据约束的自动 Todo 推进、agent 回合自动续跑、规划期 bash/network 禁用、执行期显式 `process.exec`、TUI/Print/JSON/RPC 降级和基础审计。
 
 ### M2：恢复与证据产品化
 
@@ -397,8 +398,8 @@ Plan Mode 是可信扩展集合内的代理工具权限控制，不是系统沙�
 |---|---|---|---|
 | PM-P0-001–003 | M1 已实现 strict policy | `extensions/plan-mode/index.ts`、`src/policy.ts` | `policy.test.ts`、`runtime-modes.test.ts`；后置恶意 extension 仍属边界外 |
 | PM-P0-004–005 | M1 已实现 | `plan_question`/`plan_submit`、`src/canonical.ts`、`src/artifact-store.ts` | `controller.test.ts`、`canonical.test.ts`、`policy.test.ts` |
-| PM-P0-006–007 | M1 已实现 | `src/controller.ts` approval/grant、`src/domain.ts`、`src/policy.ts` | `controller.test.ts`、`modes.test.ts`、`policy.test.ts`、`concurrency-property.test.ts` |
-| PM-P0-008 | M1 最小证据已实现；自动 verifier 留 M2 | `src/controller.ts` EvidenceRecord/verify/tool result | `controller.test.ts`；外部测试 runner 与自动验收仍待 M2 |
+| PM-P0-006–007 | M1 已实现一次 run、内部 approval/grant 分离 | `index.ts`确认适配、`src/controller.ts` run、`src/domain.ts`、`src/policy.ts` | `controller.test.ts`、`modes.test.ts`、`policy.test.ts`、`concurrency-property.test.ts` |
+| PM-P0-008 | M1 已实现能力证据约束的自动推进 | `plan_step_complete`、`src/controller.ts` EvidenceRecord/completeStep/tool result | `controller.test.ts`、`ui.test.ts`；业务语义级 verifier 仍不在 Extension 保证范围内 |
 | PM-P0-009、014 | M1 extension 可达范围已实现 | `src/controller.ts` mutex/epoch、`index.ts` abort 与最终重检 | `concurrency-property.test.ts`；核心无原子 final-policy hook，后置 handler/TOCTOU 不能完全消除 |
 | PM-P0-010、013 | M1 核心恢复已实现；完整 UI E2E 留 M2 | `src/journal.ts`、`src/artifact-store.ts`、`src/controller.ts`、session hooks | `recovery.test.ts`；真实 TUI tree/compaction 自动化仍待 M2 |
 | PM-P0-011 | M1 controller 与 Print/JSON/RPC runtime 已实现 | `src/domain.ts` action 协议、`index.ts` adapters | `modes.test.ts`、`runtime-modes.test.ts`；真实终端 TUI 自动化待 M2 |
@@ -420,14 +421,15 @@ Plan Mode 是可信扩展集合内的代理工具权限控制，不是系统沙�
 
 ## 已决策项与后续开放问题
 
-### v0.2 已决策
+### v0.3 已决策
 
 1. P0 只信任 Plan Mode Extension 内固定内置工具适配器；第三方 capability 协议后置。
-2. P0 全阶段禁用模型 bash 和 network，不提供正则 allowlist。
+2. planning/review 禁用模型 bash 和 network；executing 仅对当前计划步骤的 `process.exec` grant 开放内置 bash，不做正则“安全命令”猜测，也不声称路径沙箱。
 3. 权威工件默认用户目录，workspace 只显式导出。
-4. 人工确认可作为无法自动验证步骤的证据，但必须由非模型主体显式提交理由并审计。
+4. 普通步骤由受管 `plan_step_complete` 在能力匹配的成功工具证据基础上推进；人工确认只作为恢复/诊断后备，不进入默认执行流程。
 5. Print/JSON 使用通用字符串 CLI action flags；RPC MVP 使用 extension command。
-6. Canonical JSON 权威，Markdown 是投影；ApprovalRecord 与 ExecutionGrant 独立。
+6. Canonical JSON 权威，Markdown 是投影；ApprovalRecord 与 ExecutionGrant 独立，但由用户一次 run 确认连续创建。
+7. 完成后自动 reset；执行回合提前结束自动续跑，两次无证据进展即 pause。
 
 ### 后续开放
 

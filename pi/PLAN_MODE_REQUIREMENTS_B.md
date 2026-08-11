@@ -13,6 +13,8 @@
 | 兼容基线 | 当前发行包公开 Extension API、Session Format v3 |
 | 核心原则 | minimal core、extension-first、默认拒绝、显式审批、可恢复、可审计 |
 
+> **与方案 A v0.3 的关系**：本文仅保留为内部状态、安全、持久化和测试补充，不定义默认用户流程。与 A v0.3 冲突时以 A 为准，尤其包括“一次 run 确认后连续执行”、证据约束的自动 Todo 推进、自动完成清理，以及获批步骤显式 `process.exec` 的策略。内部 ApprovalRecord、ExecutionGrant、hash、epoch 和审计不得重新暴露为普通用户的逐步操作。
+
 ## 决策摘要
 
 Pi 明确坚持 minimal core / extension-first，README 也将 plan mode 列为应由扩展或 Pi Package 实现的工作流能力。发行包已经包含 `examples/extensions/plan-mode/`，因此本项目不是复制样例，而是将其产品化，并补齐安全边界、版本化计划协议、非 TUI 接口、恢复与测试能力。

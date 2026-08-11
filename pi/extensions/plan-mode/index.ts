@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key } from "@earendil-works/pi-tui";
+import { Key, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { PlanArtifactStore, renderPlanMarkdown } from "./src/artifact-store.ts";
 import { canonicalJson, sha256 } from "./src/canonical.ts";
@@ -23,14 +23,19 @@ import {
 } from "./src/domain.ts";
 import { AUDIT_ENTRY_TYPE } from "./src/journal.ts";
 import { calculatePolicyDigest, evaluateToolCall } from "./src/policy.ts";
+import { buildPlanProgressLines } from "./src/ui.ts";
 import { captureWorkspaceSnapshot, dependencyScopes, WorkspaceSnapshotError } from "./src/workspace.ts";
 
 const CONTEXT_TYPE = "plan-mode/context";
 const RESULT_TYPE = "plan-mode/action-result";
 const SUBMIT_TOOL = "plan_submit";
 const QUESTION_TOOL = "plan_question";
+const COMPLETE_TOOL = "plan_step_complete";
+const BLOCK_TOOL = "plan_blocked";
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const WRITE_TOOLS = ["edit", "write"];
+const PROCESS_TOOLS = ["bash"];
+const CONTROL_TOOLS = new Set([SUBMIT_TOOL, QUESTION_TOOL, COMPLETE_TOOL, BLOCK_TOOL]);
 const EXTENSION_SOURCE = import.meta.filename;
 
 function actorChannel(ctx: ExtensionContext): ActorChannel {
@@ -76,7 +81,7 @@ async function environmentFor(
 		workspaceSnapshot = await captureWorkspaceSnapshot(ctx.cwd, dependencyScopes(extra.draft));
 	} else if (
 		!workspaceSnapshot &&
-		new Set<PlanAction>(["approve", "execute", "resume"]).has(action) &&
+		new Set<PlanAction>(["approve", "run", "execute", "resume"]).has(action) &&
 		controller.spec?.workspaceSnapshot
 	) {
 		workspaceSnapshot = await captureWorkspaceSnapshot(ctx.cwd, dependencyScopes(controller.spec));
@@ -96,6 +101,33 @@ function formatResult(result: PlanActionResult): string {
 		return `PLAN_ACTION_ERROR ${result.error?.code ?? "UNKNOWN"}: ${result.error?.message ?? "Unknown error"}\nstate=${result.state.status} plan=${ref} security=${SECURITY_LEVEL}`;
 	}
 	return `PLAN_ACTION_OK state=${result.state.status} plan=${ref} epoch=${result.state.epoch} security=${SECURITY_LEVEL}`;
+}
+
+function formatTuiResult(result: PlanActionResult): string {
+	if (!result.ok) return `Plan Mode: ${result.error?.message ?? "Action failed"}`;
+	switch (result.state.status) {
+		case "inactive":
+			return "Plan Mode is inactive.";
+		case "researching":
+			return "Plan Mode started — researching read-only.";
+		case "awaiting_input":
+			return `Plan Mode needs input: ${result.pendingInput?.prompt ?? "clarification required"}`;
+		case "review":
+			return "Plan ready — confirm once to execute all Todos.";
+		case "approved":
+			return "Plan approved — ready to run.";
+		case "executing":
+			return "Plan execution is running.";
+		case "paused":
+			return `Plan paused${result.state.reason ? `: ${result.state.reason}` : "."}`;
+		case "completed":
+			return "All plan Todos completed.";
+		case "stale":
+		case "failed":
+		case "rejected":
+		case "cancelled":
+			return `Plan ${result.state.status}${result.state.reason ? `: ${result.state.reason}` : "."}`;
+	}
 }
 
 function resultError(controller: PlanController, action: PlanAction, code: PlanActionResult["error"]): PlanActionResult {
@@ -166,6 +198,11 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let pendingFlagAction:
 		| { action: PlanAction; expectedPlan?: PlanRef; extra: Partial<ActionEnvironment>; actor: Actor }
 		| undefined;
+	let lastExecutionSignature: string | undefined;
+	let stagnantExecutionTurns = 0;
+	let autonomousContinuationTurns = 0;
+	const MAX_STAGNANT_TURNS = 2;
+	const MAX_AUTONOMOUS_CONTINUATIONS = 256;
 
 	pi.registerFlag("plan", { description: "Start in strict Plan Mode", type: "boolean", default: false });
 	pi.registerFlag("plan-action", { description: "Non-interactive Plan Mode action", type: "string" });
@@ -227,8 +264,15 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (state.status === "researching" && allNames.has(QUESTION_TOOL)) visible.push(QUESTION_TOOL);
 		if (state.status === "executing") {
 			const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+			if (allNames.has(COMPLETE_TOOL)) visible.push(COMPLETE_TOOL);
+			if (allNames.has(BLOCK_TOOL)) visible.push(BLOCK_TOOL);
 			if (step?.requiredCapabilities.includes("fs.write")) {
 				for (const name of WRITE_TOOLS) {
+					if (allNames.has(name) && baselineTools.includes(name)) visible.push(name);
+				}
+			}
+			if (step?.requiredCapabilities.includes("process.exec")) {
+				for (const name of PROCESS_TOOLS) {
 					if (allNames.has(name) && baselineTools.includes(name)) visible.push(name);
 				}
 			}
@@ -247,23 +291,27 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		}
 		const color = state.status === "executing" ? "accent" : state.status === "failed" || state.status === "stale" ? "error" : "warning";
 		const spec = current.spec;
-		const workspace = spec?.workspaceSnapshot ? ` · WS ${spec.workspaceSnapshot.digest.slice(0, 8)}` : "";
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg(color, `PLAN ${state.status.toUpperCase()} · ${SECURITY_LEVEL}${workspace}`));
-		if (!spec) {
-			ctx.ui.setWidget("plan-mode", [`Plan Mode: ${state.status}`, `epoch ${state.epoch}`]);
+		const label =
+			state.status === "researching" || state.status === "awaiting_input" || state.status === "review"
+				? "PLAN · READ ONLY"
+				: state.status === "executing"
+					? "PLAN · EXECUTING"
+					: `PLAN · ${state.status.toUpperCase()}`;
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg(color, label));
+		const lines = buildPlanProgressLines(spec, state);
+		if (!lines) {
+			ctx.ui.setWidget("plan-mode", undefined);
 			return;
 		}
-		const lines = [
-			...(spec.workspaceSnapshot
-				? [`Dependencies: ${spec.workspaceSnapshot.entries.length} entries · ${spec.workspaceSnapshot.totalBytes} bytes`]
-				: []),
-			...spec.steps.map((step) => {
-				const stepState = state.steps[step.id];
-				const marker = stepState?.status === "verified" ? "☑" : step.id === state.currentStepId ? "▶" : "☐";
-				return `${marker} ${step.id} ${step.title}${stepState?.evidenceIds.length ? ` · evidence ${stepState.evidenceIds.length}` : ""}`;
-			}),
-		];
-		ctx.ui.setWidget("plan-mode", lines);
+		ctx.ui.setWidget("plan-mode", (_tui, theme) => ({
+			render(width: number): string[] {
+				return lines.map((line, index) => {
+					const styled = theme.fg(index === 0 ? "accent" : "dim", line);
+					return truncateToWidth(styled, width, theme.fg("dim", "…"));
+				});
+			},
+			invalidate() {},
+		}));
 	}
 
 	function emitMessage(ctx: ExtensionContext, customType: string, content: string, details?: unknown): void {
@@ -277,7 +325,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	}
 
 	function emitResult(ctx: ExtensionContext, result: PlanActionResult): void {
-		emitMessage(ctx, RESULT_TYPE, formatResult(result), result);
+		emitMessage(ctx, RESULT_TYPE, ctx.mode === "tui" ? formatTuiResult(result) : formatResult(result), result);
 		if (result.ok && (result.data as PlanDiff | undefined)?.schema === "dev.pi.plan-diff/v1") {
 			emitMessage(ctx, "plan-mode/diff", renderPlanDiffMarkdown(result.data as PlanDiff), result.data);
 		}
@@ -337,25 +385,93 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		return result;
 	}
 
-	async function requireInteractivePlanRef(ctx: ExtensionContext, action: "approve" | "execute" | "resume"): Promise<PlanRef | undefined> {
+	function renderUserPlan(current: PlanController): string {
+		const spec = current.spec;
+		if (!spec) return "Plan details are unavailable.";
+		const steps = spec.steps
+			.map(
+				(step, index) =>
+					`### ${index + 1}. ${step.title}\n${step.actions.map((action) => `- ${action}`).join("\n")}\n- Acceptance: ${step.acceptance.join("; ")}\n- Changes: ${step.pathScopes.join(", ") || "none"}`,
+			)
+			.join("\n\n");
+		const risks = spec.risks.length > 0 ? spec.risks.map((risk) => `- ${risk}`).join("\n") : "- None identified";
+		return `# Plan: ${spec.goal}\n\n## Todos\n\n${steps}\n\n## Risks\n${risks}`;
+	}
+
+	function planConfirmationText(current: PlanController): string {
+		const spec = current.spec;
+		if (!spec) return "Plan details are unavailable.";
+		const visibleSteps = spec.steps.slice(0, 12).map((step, index) => `${index + 1}. ${step.title}`).join("\n");
+		const hiddenSteps = spec.steps.length > 12 ? `\n… ${spec.steps.length - 12} more steps` : "";
+		const processWarning = spec.steps.some((step) => step.requiredCapabilities.includes("process.exec"))
+			? "\n\n⚠ Includes approved bash/process execution. Commands run with your user permissions, are not path-sandboxed, and may have filesystem or network side effects."
+			: "";
+		const risks = spec.risks.length > 0 ? `\n\nRisks:\n${spec.risks.slice(0, 5).map((risk) => `• ${risk}`).join("\n")}` : "";
+		return `${spec.goal}\n\nTodos (${spec.steps.length}):\n${visibleSteps}${hiddenSteps}${risks}${processWarning}`;
+	}
+
+	async function requireInteractivePlanRef(
+		ctx: ExtensionContext,
+		action: "approve" | "run" | "execute" | "resume",
+	): Promise<PlanRef | undefined> {
 		const current = ensureController(ctx);
 		const ref = current.state.planRef;
 		if (!ctx.hasUI || !ref) return undefined;
-		const spec = current.spec;
-		const scope = spec?.steps
-			.map((step) => `${step.id}: ${step.requiredCapabilities.join(",") || "fs.read"} @ ${step.pathScopes.join(",") || "read-only"}`)
-			.join("\n");
 		const confirmed = await ctx.ui.confirm(
-			`${action.toUpperCase()} exact PlanRef?`,
-			`${ref.planId}@${ref.version}\n${ref.contentHash}\n\nGrant scope:\n${scope ?? "unavailable"}\n\nSecurity: ${SECURITY_LEVEL}`,
+			action === "approve" ? "Approve this plan without starting it?" : "Execute this plan?",
+			planConfirmationText(current),
 		);
 		return confirmed ? ref : undefined;
+	}
+
+	function queueExecutionTurn(ctx: ExtensionContext, reason: string): void {
+		pi.sendMessage(
+			{
+				customType: "plan-mode/continue",
+				content: `${reason}\nContinue the approved plan from the current Todo. Do not stop between steps; use ${COMPLETE_TOOL} after each step has the required successful tool evidence. If execution is genuinely blocked or needs a wider plan, call ${BLOCK_TOOL}.`,
+				display: false,
+			},
+			{ triggerTurn: true, deliverAs: "followUp" },
+		);
+	}
+
+	async function startWithGoal(ctx: ExtensionContext, goal: string): Promise<PlanActionResult> {
+		const normalizedGoal = goal.trim();
+		const result = await dispatch(ctx, "start", { goal: normalizedGoal });
+		if (result.ok && ctx.hasUI) {
+			if (ctx.isIdle()) pi.sendUserMessage(normalizedGoal);
+			else pi.sendUserMessage(normalizedGoal, { deliverAs: "followUp" });
+		}
+		return result;
+	}
+
+	async function startFromInteractivePrompt(ctx: ExtensionContext): Promise<PlanActionResult> {
+		const current = ensureController(ctx);
+		if (!ctx.hasUI) {
+			return resultError(current, "start", {
+				code: "UI_REQUIRED",
+				message: "Bare /plan requires TUI/RPC input; use /plan <goal> or /plan start <goal>",
+				retryable: true,
+			});
+		}
+		const goal = await ctx.ui.input("Plan goal", "Describe what should be researched and planned");
+		return goal?.trim()
+			? startWithGoal(ctx, goal)
+			: resultError(current, "start", { code: "INVALID_PLAN", message: "Plan goal is required", retryable: true });
 	}
 
 	async function handleCommand(rawArgs: string, ctx: ExtensionContext): Promise<void> {
 		const current = ensureController(ctx);
 		const tokens = tokenize(rawArgs.trim());
-		let action = (tokens.shift() ?? "status") as PlanAction;
+		if (tokens.length === 0) {
+			const result =
+				current.state.status === "inactive"
+					? await startFromInteractivePrompt(ctx)
+					: await dispatch(ctx, "status");
+			emitResult(ctx, result);
+			return;
+		}
+		let action = tokens.shift() as PlanAction;
 		const known = new Set<PlanAction>([
 			"start",
 			"status",
@@ -363,6 +479,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			"diff",
 			"edit",
 			"approve",
+			"run",
 			"execute",
 			"reject",
 			"pause",
@@ -380,18 +497,20 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 		let result: PlanActionResult;
 		if (action === "start") {
-			result = await dispatch(ctx, action, { goal: tokens.join(" ") });
-		} else if (action === "approve" || action === "execute" || action === "resume") {
+			result = await startWithGoal(ctx, tokens.join(" "));
+		} else if (action === "approve" || action === "run" || action === "execute" || action === "resume") {
+			const effectiveAction: "approve" | "run" | "execute" | "resume" =
+				action === "execute" && current.state.status === "review" ? "run" : action;
 			let expected = expectedFromTokens(current, tokens);
-			if (!expected) expected = await requireInteractivePlanRef(ctx, action);
+			if (!expected) expected = await requireInteractivePlanRef(ctx, effectiveAction);
 			if (!expected) {
-				result = resultError(current, action, {
+				result = resultError(current, effectiveAction, {
 					code: ctx.hasUI ? "APPROVAL_REQUIRED" : "PLAN_REF_MISMATCH",
-					message: "Exact planId/version/hash is required; cancelled or missing",
+					message: "The current plan must be explicitly confirmed; cancelled or missing exact PlanRef",
 					retryable: true,
 				});
 			} else {
-				result = await dispatch(ctx, action, {}, expected);
+				result = await dispatch(ctx, effectiveAction, {}, expected);
 			}
 		} else if (action === "edit") {
 			if (!ctx.hasUI || !current.spec) {
@@ -454,10 +573,16 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			result = await dispatch(ctx, action);
 		}
 		emitResult(ctx, result);
+		if (result.ok && result.state.status === "executing" && new Set(["run", "execute", "resume"]).has(action)) {
+			lastExecutionSignature = undefined;
+			stagnantExecutionTurns = 0;
+			autonomousContinuationTurns = 0;
+			queueExecutionTurn(ctx, "Execution was confirmed.");
+		}
 	}
 
 	pi.registerCommand("plan", {
-		description: "Strict Plan Mode: start/status/show/diff/edit/approve/execute/reject/pause/resume/verify/cancel/reset/audit",
+		description: "Plan a task, confirm once, and execute it to completion",
 		handler: handleCommand,
 	});
 
@@ -465,15 +590,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		description: "Start or inspect strict Plan Mode",
 		handler: async (ctx) => {
 			const current = ensureController(ctx);
-			if (current.state.status === "inactive") {
-				const goal = await ctx.ui.input("Plan goal", "Describe what should be researched and planned");
-				const result = goal?.trim()
-					? await dispatch(ctx, "start", { goal: goal.trim() })
-					: resultError(current, "start", { code: "INVALID_PLAN", message: "Plan goal is required", retryable: true });
-				emitResult(ctx, result);
-			} else {
-				emitResult(ctx, await dispatch(ctx, "status"));
-			}
+			emitResult(
+				ctx,
+				current.state.status === "inactive"
+					? await startFromInteractivePrompt(ctx)
+					: await dispatch(ctx, "status"),
+			);
 		},
 	});
 
@@ -524,14 +646,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool({
 		name: SUBMIT_TOOL,
-		label: "Submit immutable plan",
+		label: "Create plan",
 		description:
-			"Submit a structured immutable PlanSpec for user review. This is the only managed write allowed while researching; it writes only to the extension-owned user plan store.",
+			"Create the structured plan shown to the user for one confirmation. This is the only managed write allowed while researching; it writes only to the extension-owned user plan store.",
 		promptGuidelines: [
 			"Use plan_submit only after research and clarification are complete.",
 			"Declare dependencyScopes separately from mutation pathScopes; dependency drift invalidates approval.",
 			"Every fs.write step must list exact project-relative files or directory roots ending in '/'.",
-			"P0 does not support bash, process execution, network access, or unknown capabilities.",
+			"Declare process.exec only on steps that genuinely need built-in bash for tests, builds, or commands.",
 		],
 		parameters: Type.Object({
 			goal: Type.String({ minLength: 1, maxLength: 16_384 }),
@@ -545,7 +667,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 					actions: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 256 }),
 					dependencyScopes: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 128 }),
 					pathScopes: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 128 }),
-					requiredCapabilities: Type.Array(StringEnum(["fs.read", "fs.write"] as const), { maxItems: 2 }),
+					requiredCapabilities: Type.Array(StringEnum(["fs.read", "fs.write", "process.exec"] as const), { maxItems: 3 }),
 					acceptance: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 256 }),
 					rollback: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
 				}),
@@ -554,17 +676,114 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			risks: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await dispatch(
+			const submitted = await dispatch(
 				ctx,
 				"submit",
 				{ draft: params as PlanDraft },
 				undefined,
 				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
 			);
+			if (!submitted.ok) throw new Error(formatResult(submitted));
+			const current = ensureController(ctx);
+			if (ctx.hasUI && current.spec) emitMessage(ctx, "plan-mode/review", renderUserPlan(current));
+			if (!ctx.hasUI) {
+				return {
+					content: [{ type: "text", text: `${formatResult(submitted)}\nPlan created. Non-interactive execution requires one explicit 'run' action bound to the exact PlanRef.` }],
+					details: submitted,
+					terminate: true,
+				};
+			}
+			const expected = await requireInteractivePlanRef(ctx, "run");
+			if (!expected) {
+				return {
+					content: [{ type: "text", text: `${formatResult(submitted)}\nPlan created but not confirmed. Stop and wait for the user to revise or run it.` }],
+					details: submitted,
+					terminate: true,
+				};
+			}
+			const running = await dispatch(ctx, "run", {}, expected);
+			if (!running.ok) throw new Error(formatResult(running));
+			lastExecutionSignature = undefined;
+			stagnantExecutionTurns = 0;
+			autonomousContinuationTurns = 0;
+			return {
+				content: [
+					{
+						type: "text",
+						text: `${formatResult(running)}\nThe user confirmed once and execution is active. Plan Mode will start the execution turn automatically with the approved tools. Continue through every Todo without asking for per-step approval; after each step has successful evidence for its declared capabilities, call ${COMPLETE_TOOL}.`,
+					},
+				],
+				details: running,
+				terminate: true,
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: COMPLETE_TOOL,
+		label: "Complete current plan step",
+		description:
+			"Mark the current Todo complete only after its declared capabilities have successful tool evidence, then advance automatically to the next Todo.",
+		promptGuidelines: [
+			"Call plan_step_complete after finishing the current step and checking its acceptance criteria.",
+			"Provide a concise evidence-based summary; do not ask the user to verify ordinary steps.",
+			`If blocked, do not call this tool—call ${BLOCK_TOOL} with the exact blocker instead.`,
+		],
+		parameters: Type.Object({
+			summary: Type.String({ minLength: 1, maxLength: 4096 }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await dispatch(
+				ctx,
+				"complete_step",
+				{ note: params.summary },
+				undefined,
+				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
+			);
+			if (!result.ok) throw new Error(formatResult(result));
+			const current = ensureController(ctx);
+			const next = current.spec?.steps.find((step) => step.id === result.state.currentStepId);
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							result.state.status === "completed"
+								? `${formatResult(result)}\nAll Todos are complete. Give the user the final result, changed files, and validation summary.`
+								: `${formatResult(result)}\nContinue immediately with ${next?.id ?? "the next Todo"}${next ? `: ${next.title}` : ""}; do not stop for user confirmation.`,
+					},
+				],
+				details: result,
+				// Each Todo gets a fresh LLM turn so capability/tool changes are guaranteed to apply.
+				terminate: result.state.status !== "completed",
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: BLOCK_TOOL,
+		label: "Pause blocked plan",
+		description: "Pause autonomous execution immediately when the current plan cannot safely continue without user input or a revised scope.",
+		promptGuidelines: [
+			"Call plan_blocked only for a real blocker, material scope change, or newly discovered high-risk decision.",
+			"State the exact blocker and what user decision or plan revision is needed.",
+		],
+		parameters: Type.Object({
+			reason: Type.String({ minLength: 1, maxLength: 4096 }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const result = await dispatch(
+				ctx,
+				"pause",
+				{ reason: params.reason },
+				undefined,
+				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
+			);
 			if (!result.ok) throw new Error(formatResult(result));
 			return {
-				content: [{ type: "text", text: `${formatResult(result)}\nStop and wait for explicit user approval; do not execute the plan.` }],
+				content: [{ type: "text", text: `${formatResult(result)}\nExecution paused for this blocker: ${params.reason}\nStop and wait for explicit user input or a revised plan.` }],
 				details: result,
+				terminate: true,
 			};
 		},
 	});
@@ -581,6 +800,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		const managedTools = [
 			{ name: SUBMIT_TOOL, sourcePath: EXTENSION_SOURCE },
 			{ name: QUESTION_TOOL, sourcePath: EXTENSION_SOURCE },
+			{ name: COMPLETE_TOOL, sourcePath: EXTENSION_SOURCE },
+			{ name: BLOCK_TOOL, sourcePath: EXTENSION_SOURCE },
 		];
 		const evaluateLatest = () =>
 			evaluateToolCall({
@@ -633,7 +854,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	pi.on("tool_result", async (event, ctx) => {
 		const current = ensureController(ctx);
-		if (current.state.status !== "executing") return;
+		if (current.state.status !== "executing" || CONTROL_TOOLS.has(event.toolName)) return;
 		let digest: string | undefined;
 		try {
 			digest = sha256(canonicalJson({ content: event.content, details: event.details, isError: event.isError }));
@@ -669,6 +890,7 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 						})
 					: await dispatch(ctx, pending.action, pending.extra, pending.expectedPlan, pending.actor);
 			emitResult(ctx, result);
+			if (result.ok && result.state.status === "executing") queueExecutionTurn(ctx, "Non-interactive execution was authorized.");
 			return { action: "handled" };
 		}
 		if (current.state.status !== "awaiting_input") return { action: "continue" };
@@ -678,7 +900,10 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("context", async (event) => ({
-		messages: event.messages.filter((message) => (message as { customType?: string }).customType !== CONTEXT_TYPE),
+		messages: event.messages.filter((message) => {
+			const customType = (message as { customType?: string }).customType;
+			return customType !== CONTEXT_TYPE && customType !== "plan-mode/review";
+		}),
 	}));
 
 	pi.on("before_agent_start", async (_event, ctx) => {
@@ -694,20 +919,63 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			message: {
 				customType: CONTEXT_TYPE,
 				display: false,
-				content: `[STRICT PLAN MODE]\nstate=${state.status}\nepoch=${state.epoch}\nsecurity=${SECURITY_LEVEL}\nplanRef=${ref}\n\n` +
+				content: `[PLAN MODE]\nstate=${state.status}\nepoch=${state.epoch}\nsecurity=${SECURITY_LEVEL}\nplanRef=${ref}\n\n` +
 					(state.status === "researching"
-						? "Research with built-in read/grep/find/ls only. Use plan_question for material uncertainty instead of guessing. When ready, call plan_submit with a structured plan. Do not modify project files."
+						? "Research with built-in read/grep/find/ls only. Use plan_question only for material uncertainty. When ready, call plan_submit; it will show the plan and request one execution confirmation. Do not modify project files."
 						: state.status === "awaiting_input"
-							? `Stop and wait for explicit clarification: ${state.pendingInput?.prompt ?? "input required"}`
+							? `Stop and wait for the requested clarification: ${state.pendingInput?.prompt ?? "input required"}`
 							: state.status === "review"
-							? "The immutable plan is awaiting explicit user approval. Do not execute or claim approval."
-							: state.status === "approved"
-								? "The plan is approved but no ExecutionGrant exists. Wait for explicit execute."
-								: state.status === "executing" && step
-									? `Execute only current step ${step.id}: ${step.title}. Allowed paths: ${step.pathScopes.join(", ") || "none"}. Acceptance: ${step.acceptance.join("; ")}. Bash/network remain denied. Tool success is evidence but does not verify the step; ask the user to verify.`
-									: "Plan Mode is paused, stale, terminal, or failed. Do not perform mutations until the user supplies a valid action."),
+								? "The plan is ready but was not confirmed. Wait for the user to revise it or run it; never self-approve."
+								: state.status === "approved"
+									? "A legacy approval exists without an active grant. Wait for the user's run action."
+									: state.status === "executing" && step
+										? `Execute current Todo ${step.id}: ${step.title}. Allowed write paths: ${step.pathScopes.join(", ") || "none"}. Capabilities: ${step.requiredCapabilities.join(", ") || "fs.read"}. Acceptance: ${step.acceptance.join("; ")}. Continue without per-step user approval. Once successful tool evidence covers every declared capability, call ${COMPLETE_TOOL} with a concise summary and proceed to the next Todo. If genuinely blocked, a material scope change is required, or a new high-risk decision appears, call ${BLOCK_TOOL} with the exact reason instead of merely stopping.`
+										: "Plan Mode is paused, stale, completed, or failed. Do not perform plan mutations until a valid user action or automatic completion cleanup."),
 			},
 		};
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		const current = ensureController(ctx);
+		const state = current.state;
+		if (state.status === "completed") {
+			if (ctx.hasUI) ctx.ui.notify("Plan completed", "info");
+			const reset = await dispatch(ctx, "reset", {}, undefined, { channel: "system", id: "automatic-completion-cleanup" });
+			if (!reset.ok) emitResult(ctx, reset);
+			lastExecutionSignature = undefined;
+			stagnantExecutionTurns = 0;
+			autonomousContinuationTurns = 0;
+			return;
+		}
+		if (state.status !== "executing") {
+			lastExecutionSignature = undefined;
+			stagnantExecutionTurns = 0;
+			autonomousContinuationTurns = 0;
+			return;
+		}
+
+		const stepState = state.currentStepId ? state.steps[state.currentStepId] : undefined;
+		const signature = `${state.currentStepId ?? "none"}:${stepState?.evidenceIds.length ?? 0}`;
+		stagnantExecutionTurns = signature === lastExecutionSignature ? stagnantExecutionTurns + 1 : 0;
+		lastExecutionSignature = signature;
+		if (stagnantExecutionTurns >= MAX_STAGNANT_TURNS || autonomousContinuationTurns >= MAX_AUTONOMOUS_CONTINUATIONS) {
+			const reason =
+				stagnantExecutionTurns >= MAX_STAGNANT_TURNS
+					? "Execution paused after two automatic continuation turns made no tool-evidence progress"
+					: "Execution paused after reaching the autonomous continuation safety limit";
+			const paused = await dispatch(
+				ctx,
+				"pause",
+				{ reason },
+				undefined,
+				{ channel: "system", id: "autonomous-continuation-guard" },
+			);
+			emitResult(ctx, paused);
+			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+			return;
+		}
+		autonomousContinuationTurns += 1;
+		queueExecutionTurn(ctx, `Todo ${state.currentStepId ?? "unknown"} is still active.`);
 	});
 
 	pi.on("session_start", async (event, ctx) => {

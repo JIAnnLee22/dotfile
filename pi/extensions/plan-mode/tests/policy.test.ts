@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import test from "node:test";
+import type { PlanDraft } from "../src/domain.ts";
 import { evaluateToolCall } from "../src/policy.ts";
 import { actor, draft, environment, fixture, modelActor, request } from "./helpers.ts";
 
@@ -102,6 +103,38 @@ test("PM-P0-004 managed clarification and submission tools require the exact ext
 	}
 });
 
+test("PM-P0-008 managed completion and blocker tools require executing state and exact source", async () => {
+	const f = await fixture();
+	try {
+		await f.controller.dispatch(request("start"), environment(f.scope, { goal: draft.goal }));
+		await f.controller.dispatch(request("submit", undefined, modelActor), environment(f.scope, { draft }));
+		const ref = f.controller.state.planRef!;
+		await f.controller.dispatch(request("run", ref), environment(f.scope));
+		for (const toolName of ["plan_step_complete", "plan_blocked"]) {
+			const allowed = evaluateToolCall({
+				state: f.controller.state,
+				toolName,
+				input: {},
+				toolInfo: { name: toolName, sourceInfo: { source: "extension", path: "/trusted/plan-mode.ts" } },
+				managedTools: [{ name: toolName, sourcePath: "/trusted/plan-mode.ts" }],
+				cwd: f.cwd,
+			});
+			assert.equal(allowed.allow, true, toolName);
+			const replaced = evaluateToolCall({
+				state: f.controller.state,
+				toolName,
+				input: {},
+				toolInfo: { name: toolName, sourceInfo: { source: "extension", path: "/untrusted/override.ts" } },
+				managedTools: [{ name: toolName, sourcePath: "/trusted/plan-mode.ts" }],
+				cwd: f.cwd,
+			});
+			assert.equal(replaced.allow, false, toolName);
+		}
+	} finally {
+		await f.cleanup();
+	}
+});
+
 test("PM-P0-007 symlink escapes are resolved and denied", async () => {
 	const f = await fixture();
 	try {
@@ -184,14 +217,13 @@ test("PM-P0-007 approved write scope cannot escape cwd through a symlink", async
 	}
 });
 
-test("PM-P0-003 bash remains denied during executing", async () => {
+test("PM-P0-003 bash remains denied unless the current approved step declares process.exec", async () => {
 	const f = await fixture();
 	try {
 		await f.controller.dispatch(request("start"), environment(f.scope, { goal: draft.goal }));
 		await f.controller.dispatch(request("submit", undefined, modelActor), environment(f.scope, { draft }));
 		const ref = f.controller.state.planRef!;
-		await f.controller.dispatch(request("approve", ref), environment(f.scope));
-		await f.controller.dispatch(request("execute", ref), environment(f.scope));
+		await f.controller.dispatch(request("run", ref), environment(f.scope));
 		const decision = evaluateToolCall({
 			state: f.controller.state,
 			spec: f.controller.spec,
@@ -202,7 +234,44 @@ test("PM-P0-003 bash remains denied during executing", async () => {
 			cwd: f.cwd,
 		});
 		assert.equal(decision.allow, false);
-		assert.match(decision.reason, /every Plan Mode state/);
+		assert.match(decision.reason, /does not grant process\.exec/);
+	} finally {
+		await f.cleanup();
+	}
+});
+
+test("PM-P0-007 one approval allows built-in bash only for a process.exec Todo", async () => {
+	const f = await fixture();
+	try {
+		const processDraft: PlanDraft = {
+			...draft,
+			steps: [
+				{
+					...draft.steps[0],
+					title: "Run regression tests",
+					actions: ["Run the approved regression command"],
+					pathScopes: [],
+					requiredCapabilities: ["fs.read", "process.exec"],
+					acceptance: ["Regression command succeeds"],
+				},
+			],
+		};
+		await f.controller.dispatch(request("start"), environment(f.scope, { goal: processDraft.goal }));
+		await f.controller.dispatch(request("submit", undefined, modelActor), environment(f.scope, { draft: processDraft }));
+		const ref = f.controller.state.planRef!;
+		await f.controller.dispatch(request("run", ref), environment(f.scope));
+		const decision = evaluateToolCall({
+			state: f.controller.state,
+			spec: f.controller.spec,
+			grant: f.controller.grant,
+			toolName: "bash",
+			input: { command: "node --test" },
+			toolInfo: builtin("bash"),
+			cwd: f.cwd,
+		});
+		assert.equal(decision.allow, true);
+		assert.equal(decision.capability, "process.exec");
+		assert.match(decision.reason, /not path-sandboxed|unrestricted built-in process execution/);
 	} finally {
 		await f.cleanup();
 	}

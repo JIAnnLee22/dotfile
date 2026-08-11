@@ -130,8 +130,8 @@ export function validatePlanSpec(spec: PlanSpec): string[] {
 		if (step.actions.length === 0) errors.push(`steps[${index}].actions must not be empty`);
 		if (step.acceptance.length === 0) errors.push(`steps[${index}].acceptance must not be empty`);
 		for (const capability of step.requiredCapabilities) {
-			if (capability !== "fs.read" && capability !== "fs.write") {
-				errors.push(`steps[${index}] contains unsupported P0 capability: ${String(capability)}`);
+			if (capability !== "fs.read" && capability !== "fs.write" && capability !== "process.exec") {
+				errors.push(`steps[${index}] contains unsupported capability: ${String(capability)}`);
 			}
 		}
 		if (step.requiredCapabilities.includes("fs.write") && step.pathScopes.length === 0) {
