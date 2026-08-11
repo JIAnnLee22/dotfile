@@ -1680,7 +1680,7 @@
         "maxTokens": 65536
       }
     ],
-    "checkedAt": 1786345086813,
+    "checkedAt": 1786413252799,
     "lastModified": 1786098937000,
     "etag": "W/\"6a3d869f61e07364aa91690663bac71e\""
   },
@@ -1707,6 +1707,7 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens",
           "requiresReasoningContentOnAssistantMessages": true,
           "thinkingFormat": "deepseek"
         },
@@ -1739,6 +1740,7 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens",
           "requiresReasoningContentOnAssistantMessages": true,
           "thinkingFormat": "deepseek"
         },
@@ -1751,9 +1753,9 @@
         }
       }
     ],
-    "checkedAt": 1786345106061,
-    "lastModified": 1786098914000,
-    "etag": "W/\"15596aeadbdb5757401fcd2de812dcda\""
+    "checkedAt": 1786413622852,
+    "lastModified": 1786365267000,
+    "etag": "W/\"b4b90d7425a9372c93969eba5176598c\""
   },
   "xiaomi": {
     "models": [
@@ -1898,7 +1900,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1786341754233,
+    "checkedAt": 1786413252178,
     "lastModified": 1786098949000,
     "etag": "W/\"f347fd944aeb38f29da3a4efcb49e3ce\""
   },
@@ -2395,7 +2397,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1786345691157,
+    "checkedAt": 1786413201811,
     "lastModified": 1786098938000,
     "etag": "W/\"fc45c5903aaf73b9f2cdfd74cc3f77f9\""
   }
