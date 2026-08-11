@@ -3,15 +3,14 @@
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-web-access",
-    "npm:context-mode",
-    "npm:claude-agent-sdk-pi"
+    "npm:context-mode"
   ],
   "skills": [
     "./skills"
   ],
   "lastChangelogVersion": "0.84.1",
-  "defaultProvider": "claude-agent-sdk",
-  "defaultModel": "claude-opus-5",
+  "defaultProvider": "vimedia",
+  "defaultModel": "claude-opus-4-8-q",
   "defaultThinkingLevel": "max",
   "theme": "dark",
   "outputPad": 0,
