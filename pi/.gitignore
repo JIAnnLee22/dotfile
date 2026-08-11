@@ -1,6 +1,7 @@
 # 敏感信息 - API密钥和认证令牌
 auth.json
 agent/auth.json
+custom_provider.json
 
 # 会话记录 - 自动生成
 sessions/
