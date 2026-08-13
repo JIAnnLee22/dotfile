@@ -9,14 +9,18 @@
     "./skills"
   ],
   "lastChangelogVersion": "0.84.1",
-  "defaultProvider": "vimedia",
-  "defaultModel": "claude-opus-4-8-q",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "deepseek-v4-flash",
   "defaultThinkingLevel": "max",
   "theme": "dark",
+  "quietStartup": true,
+  "collapseChangelog": true,
   "outputPad": 0,
-  "hideThinkingBlock": false,
+  "editorPaddingX": 0,
+  "hideThinkingBlock": true,
   "tuiMode": "fullscreen",
   "warnings": {
     "anthropicExtraUsage": false
-  }
+  },
+  "fullscreenScrollbar": "hidden"
 }

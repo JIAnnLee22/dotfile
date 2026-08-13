@@ -195,6 +195,9 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	let baselineTools: string[] | undefined;
 	let startupFlagsHandled = false;
 	let pendingStartupNotice: PlanActionResult | undefined;
+	// Operations Deck 联动：deck 处于 full 模式时隐藏本扩展的独立 widget（S4）。
+	let deckControlsWidget = false;
+	let deckModeListener: (() => void) | undefined;
 	let pendingFlagAction:
 		| { action: PlanAction; expectedPlan?: PlanRef; extra: Partial<ActionEnvironment>; actor: Actor }
 		| undefined;
@@ -284,6 +287,12 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (!ctx.hasUI) return;
 		const current = ensureController(ctx);
 		const state = current.state;
+		if (deckControlsWidget) {
+			// Operations Deck 的 full 模式接管 Plan 展示：隐藏本扩展的 widget 与 footer 状态。
+			ctx.ui.setStatus("plan-mode", undefined);
+			ctx.ui.setWidget("plan-mode", undefined);
+			return;
+		}
 		if (state.status === "inactive") {
 			ctx.ui.setStatus("plan-mode", undefined);
 			ctx.ui.setWidget("plan-mode", undefined);
@@ -312,6 +321,8 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			},
 			invalidate() {},
 		}));
+		// 广播只读 Plan 快照给 Operations Deck（显示用，非权威状态）。
+		pi.events.emit("operations-deck:plan", { state, spec });
 	}
 
 	function emitMessage(ctx: ExtensionContext, customType: string, content: string, details?: unknown): void {
@@ -979,6 +990,16 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		if (!deckModeListener) {
+			deckModeListener = pi.events.on("operations-deck:mode", (data) => {
+				const mode = (data as { mode?: string } | undefined)?.mode;
+				const controlled = mode === "full";
+				if (controlled !== deckControlsWidget) {
+					deckControlsWidget = controlled;
+					updateUI(ctx);
+				}
+			});
+		}
 		const current = ensureController(ctx);
 		const digests = { policyDigest: policyDigest(pi), contextDigest: contextDigest(ctx) };
 		await current.recover(ctx.sessionManager.getBranch(), event.reason, scopeFor(ctx), digests);
@@ -1008,6 +1029,14 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		}
 		applyVisibleTools(ctx);
 		updateUI(ctx);
+	});
+
+	pi.on("session_shutdown", () => {
+		if (deckModeListener) {
+			deckModeListener();
+			deckModeListener = undefined;
+		}
+		deckControlsWidget = false;
 	});
 
 	pi.on("session_before_tree", async (_event, ctx) => {

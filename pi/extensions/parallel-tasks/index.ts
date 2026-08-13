@@ -40,6 +40,8 @@ interface TaskResult {
 	stderr: string;
 	stopReason?: string;
 	errorMessage?: string;
+	/** 实际运行模型（从子进程 message_end 的 msg.model 捕获；可能缺失）。 */
+	model?: string;
 	usage: { input: number; output: number; cost: number; turns: number };
 	durationMs: number;
 }
@@ -217,6 +219,7 @@ async function runTask(
 				}
 				if (msg.stopReason) result.stopReason = msg.stopReason;
 				if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+				if (msg.model) result.model = msg.model;
 				onProgress();
 			};
 
@@ -386,10 +389,12 @@ export default function (pi: ExtensionAPI) {
 			const done = new Set<number>();
 
 			const emit = () => {
+				const details = { results: [...live], running: live.length - done.size } as Details;
 				onUpdate?.({
 					content: [{ type: "text", text: `并行执行中：${done.size}/${live.length} 完成` }],
-					details: { results: [...live], running: live.length - done.size } as Details,
+					details,
 				});
+				pi.events.emit("operations-deck:tasks", details);
 			};
 			emit();
 
