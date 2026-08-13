@@ -1680,7 +1680,7 @@
         },
         "thinkingLevelMap": {
           "minimal": null,
-          "low": null,
+          "low": "low",
           "medium": null,
           "high": "high",
           "max": "max"
@@ -1720,9 +1720,9 @@
         }
       }
     ],
-    "checkedAt": 1786434425910,
-    "lastModified": 1786365267000,
-    "etag": "W/\"b4b90d7425a9372c93969eba5176598c\""
+    "checkedAt": 1786603505463,
+    "lastModified": 1786550231000,
+    "etag": "W/\"c856e605b796f2df5d2cc4d7c20336f5\""
   },
   "xiaomi": {
     "models": [
@@ -1867,7 +1867,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1786511214575,
+    "checkedAt": 1786604210634,
     "lastModified": 1786098949000,
     "etag": "W/\"f347fd944aeb38f29da3a4efcb49e3ce\""
   },
@@ -2616,7 +2616,7 @@
         }
       }
     ],
-    "checkedAt": 1786519248370,
+    "checkedAt": 1786604212870,
     "lastModified": 1786365287000,
     "etag": "W/\"7572a78e60b78526600ed2a9b74b579d\""
   }
