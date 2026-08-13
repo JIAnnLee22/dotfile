@@ -11,16 +11,18 @@
   "lastChangelogVersion": "0.84.1",
   "defaultProvider": "opencode-go",
   "defaultModel": "deepseek-v4-flash",
-  "defaultThinkingLevel": "max",
+  "defaultThinkingLevel": "high",
   "theme": "dark",
   "quietStartup": true,
   "collapseChangelog": true,
   "outputPad": 0,
   "editorPaddingX": 0,
-  "hideThinkingBlock": true,
+  "hideThinkingBlock": false,
   "tuiMode": "fullscreen",
   "warnings": {
     "anthropicExtraUsage": false
   },
-  "fullscreenScrollbar": "hidden"
+  "fullscreenScrollbar": "hidden",
+  "defaultProjectTrust": "ask",
+  "doubleEscapeAction": "tree"
 }
