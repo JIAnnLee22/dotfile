@@ -11,29 +11,20 @@ export default function (pi: ExtensionAPI) {
 		handler: async (_args: string, ctx: ExtensionCommandContext) => {
 			await ctx.ui.custom<void>((tui, theme, _kb, done) => new OpenCodeGoUsageOverlay(tui, theme, ctx, done), {
 				overlay: true,
-				overlayOptions: { anchor: "top-right", width: 40, maxHeight: 20 },
+				overlayOptions: { anchor: "top-right", width: 50, maxHeight: 20 },
 			});
 		}
 	});
 };
 
 export function formatTime(time: string) {
-	return new Date(time).toLocaleString("zh-CN", {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
+	return new Intl.DateTimeFormat("zh-CN", {
+		month: "2-digit",
+		day: "2-digit",
 		hour: "2-digit",
 		minute: "2-digit",
 		hour12: false,
-	})
-	// return new Date(time).toLocaleString("sv-SE", {
-
-	// 	year: "2-digit",
-	// 	month: "2-digit",
-	// 	day: "2-digit",
-	// 	hour: "2-digit",
-	// 	minute: "2-digit",
-	// })
+	}).format(new Date(time))
 }
 
 abstract class BaseOverlay {
@@ -100,6 +91,10 @@ export async function getApiKey(ctx: ExtensionCommandContext): Promise<string> {
 		throw new Error("Failed to get opencode go api key")
 	}
 	return apiKey
+}
+export function formatPercent(remaining: number, reset: string): string {
+	const filled = Math.round((remaining / 100) * 20);
+	return `${"█".repeat(filled)}${"░".repeat(20 - filled)} ${remaining.toFixed(0)}% ${formatTime(reset)}更新`;
 }
 
 class OpenCodeGoUsageOverlay extends BaseOverlay {
@@ -168,21 +163,21 @@ class OpenCodeGoUsageOverlay extends BaseOverlay {
 
 		// Spinning character
 		const spinChars = ["◐", "◓", "◑", "◒"];
-		const singleProgress = "█";
 		const spin = spinChars[this.frame % spinChars.length];
 		if (this.error) {
 			lines.push(border("│") + padLine(` Failed: ${th.fg("error", truncateToWidth(this.error, innerW - 4))}`) + border("│"));
+			lines.push(border("│") + padLine(``) + border("│"));
+			lines.push(border("│") + padLine(``) + border("│"));
 		} else if (this.usage) {
 			const u = this.usage.usage;
-			const pct = (w: UsageWindow) => `${w.percent}% 重置于 ${formatTime(w.resetsAt)})`;
-			lines.push(border("│") + padLine(` 5时: ${th.fg("accent", pct(u.rolling))}`) + border("│"));
-			lines.push(border("│") + padLine(`  周: ${th.fg("accent", pct(u.weekly))}`) + border("│"));
-			lines.push(border("│") + padLine(`  月: ${th.fg("accent", pct(u.monthly))}`) + border("│"));
+			lines.push(border("│") + padLine(` 5时: ${th.fg("accent", formatPercent(u.rolling.percent, u.rolling.resetsAt))}`) + border("│"));
+			lines.push(border("│") + padLine(`  周: ${th.fg("accent", formatPercent(u.weekly.percent, u.weekly.resetsAt))}`) + border("│"));
+			lines.push(border("│") + padLine(`  月: ${th.fg("accent", formatPercent(u.monthly.percent, u.monthly.resetsAt))}`) + border("│"));
 		} else {
 			lines.push(border("│") + padLine(` Requesting Usage: ${th.fg("warning", spin)}`) + border("│"));
+			lines.push(border("│") + padLine(``) + border("│"));
+			lines.push(border("│") + padLine(``) + border("│"));
 		}
-		lines.push(border("│") + padLine(``) + border("│"));
-		lines.push(border("│") + padLine(th.fg("dim", " request usage when show this overlay")) + border("│"));
 		lines.push(border("│") + padLine(``) + border("│"));
 		lines.push(border("│") + padLine(th.fg("dim", " Press Esc to close")) + border("│"));
 		lines.push(border(`╰${"─".repeat(innerW)}╯`));
