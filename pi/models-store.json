@@ -324,7 +324,7 @@
         "thinkingLevelMap": {
           "off": null,
           "minimal": null,
-          "low": null,
+          "low": "low",
           "medium": null,
           "high": "high",
           "xhigh": null,
@@ -358,7 +358,7 @@
         "thinkingLevelMap": {
           "off": null,
           "minimal": null,
-          "low": null,
+          "low": "low",
           "medium": null,
           "high": "high",
           "xhigh": null,
@@ -1743,9 +1743,9 @@
         "maxTokens": 65536
       }
     ],
-    "checkedAt": 1786876392005,
-    "lastModified": 1786710731000,
-    "etag": "W/\"ac63f8722c8ea44684278afd3c5e76b9\""
+    "checkedAt": 1787016268661,
+    "lastModified": 1786970930000,
+    "etag": "W/\"7afecd8a671cceba723b105cd8700d48\""
   },
   "deepseek": {
     "models": [
@@ -1816,82 +1816,12 @@
         }
       }
     ],
-    "checkedAt": 1786875906109,
+    "checkedAt": 1787016268051,
     "lastModified": 1786550231000,
     "etag": "W/\"c856e605b796f2df5d2cc4d7c20336f5\""
   },
   "xiaomi": {
     "models": [
-      {
-        "id": "mimo-v2-flash",
-        "name": "MiMo-V2-Flash",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text"
-        ],
-        "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cacheRead": 0.0028,
-          "cacheWrite": 0
-        },
-        "contextWindow": 262144,
-        "maxTokens": 65536
-      },
-      {
-        "id": "mimo-v2-omni",
-        "name": "MiMo-V2-Omni",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "cost": {
-          "input": 0.14,
-          "output": 0.28,
-          "cacheRead": 0.0028,
-          "cacheWrite": 0
-        },
-        "contextWindow": 262144,
-        "maxTokens": 131072
-      },
-      {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "api": "openai-completions",
-        "provider": "xiaomi",
-        "baseUrl": "https://api.xiaomimimo.com/v1",
-        "compat": {
-          "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
-        },
-        "reasoning": true,
-        "input": [
-          "text"
-        ],
-        "cost": {
-          "input": 0.435,
-          "output": 0.87,
-          "cacheRead": 0.0036,
-          "cacheWrite": 0
-        },
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
       {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
@@ -1963,15 +1893,15 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1786890843557,
-    "lastModified": 1786098949000,
-    "etag": "W/\"f347fd944aeb38f29da3a4efcb49e3ce\""
+    "checkedAt": 1787016268265,
+    "lastModified": 1786970942000,
+    "etag": "W/\"3db76cd3404affdf755b2efc443b74c3\""
   },
   "opencode-go": {
     "models": [
       {
         "id": "deepseek-v4-flash",
-        "name": "DeepSeek V4 Flash (2x usage)",
+        "name": "DeepSeek V4 Flash",
         "api": "openai-completions",
         "provider": "opencode-go",
         "baseUrl": "https://opencode.ai/zen/go/v1",
@@ -1980,9 +1910,9 @@
           "text"
         ],
         "cost": {
-          "input": 0.07,
-          "output": 0.14,
-          "cacheRead": 0.0014,
+          "input": 0.22,
+          "output": 0.66,
+          "cacheRead": 0.007,
           "cacheWrite": 0
         },
         "compat": {
@@ -1996,7 +1926,7 @@
         "maxTokens": 384000,
         "thinkingLevelMap": {
           "minimal": null,
-          "low": null,
+          "low": "low",
           "medium": null,
           "high": "high",
           "max": "max"
@@ -2013,9 +1943,9 @@
           "text"
         ],
         "cost": {
-          "input": 0.435,
-          "output": 0.87,
-          "cacheRead": 0.003625,
+          "input": 0.66,
+          "output": 1.98,
+          "cacheRead": 0.022,
           "cacheWrite": 0
         },
         "compat": {
@@ -2436,9 +2366,9 @@
       {
         "id": "qwen3.7-max",
         "name": "Qwen3.7 Max",
-        "api": "anthropic-messages",
+        "api": "openai-completions",
         "provider": "opencode-go",
-        "baseUrl": "https://opencode.ai/zen/go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
         "reasoning": true,
         "input": [
           "text"
@@ -2449,15 +2379,20 @@
           "cacheRead": 0.5,
           "cacheWrite": 3.125
         },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens"
+        },
         "contextWindow": 1000000,
         "maxTokens": 65536
       },
       {
         "id": "qwen3.7-plus",
         "name": "Qwen3.7 Plus",
-        "api": "anthropic-messages",
+        "api": "openai-completions",
         "provider": "opencode-go",
-        "baseUrl": "https://opencode.ai/zen/go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
         "reasoning": true,
         "input": [
           "text",
@@ -2469,15 +2404,20 @@
           "cacheRead": 0.04,
           "cacheWrite": 0.5
         },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens"
+        },
         "contextWindow": 1000000,
         "maxTokens": 65536
       },
       {
         "id": "qwen3.8-max",
         "name": "Qwen3.8 Max",
-        "api": "anthropic-messages",
+        "api": "openai-completions",
         "provider": "opencode-go",
-        "baseUrl": "https://opencode.ai/zen/go",
+        "baseUrl": "https://opencode.ai/zen/go/v1",
         "reasoning": true,
         "input": [
           "text",
@@ -2489,13 +2429,18 @@
           "cacheRead": 0.25,
           "cacheWrite": 2.5
         },
+        "compat": {
+          "supportsStore": false,
+          "supportsDeveloperRole": false,
+          "maxTokensField": "max_tokens"
+        },
         "contextWindow": 1000000,
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1786790812183,
-    "lastModified": 1786710732000,
-    "etag": "W/\"f937c041223fd8e9c8499d8331f0cc3e\""
+    "checkedAt": 1787016269522,
+    "lastModified": 1786970931000,
+    "etag": "W/\"ccab3063f2d3e2c38944d884aa972eb8\""
   },
   "openai-codex": {
     "models": [
@@ -2745,7 +2690,7 @@
         }
       }
     ],
-    "checkedAt": 1786890830499,
+    "checkedAt": 1787016270817,
     "lastModified": 1786365287000,
     "etag": "W/\"7572a78e60b78526600ed2a9b74b579d\""
   }

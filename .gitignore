@@ -24,6 +24,8 @@ pi/.idea/
 pi/*.swp
 pi/*.swo
 pi/*~
+pi/models.json.bak
+pi/fff/
 /pi/.plans
 
 # opencode配置 - 忽略敏感信息和自动生成的文件

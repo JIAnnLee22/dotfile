@@ -4,15 +4,661 @@
       "name": "vimedia",
       "baseUrl": "https://dn-api-ai.vigame.cn/v1",
       "api": "openai-completions",
+      "compat": {
+        "supportsDeveloperRole": false
+      },
       "models": [
-        { "id": "cd-opus-4.7", "name": "Claude Opus 4.7", "reasoning": true, "input": ["text"] },
-        { "id": "cd-sonnet-4.6", "name": "Claude Sonnet 4.6", "reasoning": true, "input": ["text"] },
-        { "id": "claude-opus-4-8-q", "name": "Claude Opus 4.8", "reasoning": true, "input": ["text"] },
-        { "id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash", "reasoning": true, "input": ["text"] },
-        { "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "reasoning": true, "input": ["text"] },
-        { "id": "gpt-5.5", "name": "GPT-5.5", "reasoning": true, "input": ["text"] },
-        { "id": "kimi-k3-tx", "name": "Kimi K3", "reasoning": true, "input": ["text"] },
-        { "id": "gemini-3.5-flash-q", "name": "Gemini 3.5 Flash", "reasoning": true, "input": ["text"] }
+        {
+          "id": "DeepSeek-V4-Flash-tx",
+          "name": "DeepSeek V4 Flash (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "DeepSeek-V4-Pro-tx",
+          "name": "DeepSeek V4 Pro (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "Doubao-pro-32k",
+          "name": "Doubao Pro 32K",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "MiniMax-M2.5",
+          "name": "MiniMax M2.5",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "cd-opus-4.6",
+          "name": "Claude Opus 4.6",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "cd-opus-4.7",
+          "name": "Claude Opus 4.7",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "cd-sonnet-4.6",
+          "name": "Claude Sonnet 4.6",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-fable-5-q",
+          "name": "Claude Fable 5",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-haiku-4-5-20251001",
+          "name": "Claude Haiku 4.5",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-opus-4-6",
+          "name": "Claude Opus 4.6",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-opus-4-6-guidor",
+          "name": "Claude Opus 4.6 (Guidor)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-opus-4-7-q",
+          "name": "Claude Opus 4.7",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-opus-4-8-q",
+          "name": "Claude Opus 4.8",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "claude-sonnet-4-6-q",
+          "name": "Claude Sonnet 4.6",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "deepseek-v3-2-251201",
+          "name": "DeepSeek V3.2",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "DeepSeek V4 Flash",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "DeepSeek V4 Pro",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seed-2-0-code-preview-260215",
+          "name": "Doubao Seed 2.0 Code",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seed-2-0-lite-260215",
+          "name": "Doubao Seed 2.0 Lite",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seed-2-0-mini-260215",
+          "name": "Doubao Seed 2.0 Mini",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seed-2-0-pro-260215",
+          "name": "Doubao Seed 2.0 Pro",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.1-flash-lite-preview",
+          "name": "Gemini 3.1 Flash Lite",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.1-flash-lite-preview-q",
+          "name": "Gemini 3.1 Flash Lite Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.1-pro-grsai",
+          "name": "Gemini 3.1 Pro (GRS)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.1-pro-preview",
+          "name": "Gemini 3.1 Pro",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.1-pro-preview-guidor",
+          "name": "Gemini 3.1 Pro (Guidor)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gemini-3.5-flash-q",
+          "name": "Gemini 3.5 Flash",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "glm-4-7-251222",
+          "name": "GLM-4.7",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "glm-5.1",
+          "name": "GLM-5.1",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "glm-5.2-ali",
+          "name": "GLM-5.2 (Ali)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "glm-5.2-tx",
+          "name": "GLM-5.2 (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-4",
+          "name": "GPT-4",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.4",
+          "name": "GPT-5.4",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.4-mini",
+          "name": "GPT-5.4 Mini",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.4-quanter",
+          "name": "GPT-5.4 Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.5",
+          "name": "GPT-5.5",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.5-quanter",
+          "name": "GPT-5.5 Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.5-tx",
+          "name": "GPT-5.5 (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.6-luna-quanter",
+          "name": "GPT-5.6 Luna",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.6-sol-quanter",
+          "name": "GPT-5.6 Sol",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-5.6-terra-quanter",
+          "name": "GPT-5.6 Terra",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2",
+          "name": "GPT Image 2",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2-bd",
+          "name": "GPT Image 2 (BD)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2-q",
+          "name": "GPT Image 2 (Q)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2-tx",
+          "name": "GPT Image 2 (TX)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2-vip",
+          "name": "GPT Image 2 (VIP)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "hy3",
+          "name": "Hy3 (Tencent Hunyuan)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "ideogram-instructional-edit",
+          "name": "Ideogram Edit",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "kimi-k2.6",
+          "name": "Kimi K2.6",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "kimi-k3-tx",
+          "name": "Kimi K3",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana",
+          "name": "Nano Banana",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana-pro",
+          "name": "Nano Banana Pro",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana-pro-bd",
+          "name": "Nano Banana Pro (BD)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana-pro-q",
+          "name": "Nano Banana Pro (Q)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana-pro-tx",
+          "name": "Nano Banana Pro (TX)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen-plus",
+          "name": "Qwen Plus",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen-turbo",
+          "name": "Qwen Turbo",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen3.5-plus",
+          "name": "Qwen3.5 Plus",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen3.6-plus",
+          "name": "Qwen3.6 Plus",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen3.7-max",
+          "name": "Qwen3.7 Max",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "text-embedding-v1",
+          "name": "Text Embedding v1",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "text-embedding-v4",
+          "name": "Text Embedding v4",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-image-elements-remove",
+          "name": "Volcengine Image Erase",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-image-enhance",
+          "name": "Volcengine Image Enhance",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        }
       ]
     }
   }

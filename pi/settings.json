@@ -1,28 +1,28 @@
 {
+  "collapseChangelog": true,
+  "defaultModel": "DeepSeek-V4-Flash-tx",
+  "defaultProjectTrust": "ask",
+  "defaultProvider": "vimedia",
+  "defaultThinkingLevel": "high",
+  "doubleEscapeAction": "tree",
+  "editorPaddingX": 0,
   "extensions": [],
+  "fullscreenScrollbar": "hidden",
+  "hideThinkingBlock": false,
+  "lastChangelogVersion": "0.84.2",
+  "outputPad": 0,
   "packages": [
     "npm:@ff-labs/pi-fff",
     "npm:pi-web-access",
     "npm:context-mode"
   ],
+  "quietStartup": true,
   "skills": [
     "./skills"
   ],
-  "lastChangelogVersion": "0.84.2",
-  "defaultProvider": "opencode-go",
-  "defaultModel": "deepseek-v4-flash",
-  "defaultThinkingLevel": "max",
   "theme": "dark",
-  "quietStartup": true,
-  "collapseChangelog": true,
-  "outputPad": 0,
-  "editorPaddingX": 0,
-  "hideThinkingBlock": false,
   "tuiMode": "fullscreen",
   "warnings": {
     "anthropicExtraUsage": false
-  },
-  "fullscreenScrollbar": "hidden",
-  "defaultProjectTrust": "ask",
-  "doubleEscapeAction": "tree"
+  }
 }

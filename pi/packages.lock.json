@@ -1,0 +1,50 @@
+{
+  "entries": [
+    {
+      "digest_sha256": "e0444c8f8fc8a017df7e97d1d6646e6f844d2dc517a21eca12bfbfa543bb765e",
+      "identity": "npm:@ff-labs/pi-fff",
+      "resolved": {
+        "installed_version": "0.10.3",
+        "kind": "npm",
+        "name": "@ff-labs/pi-fff",
+        "pinned": false,
+        "requested_spec": "@ff-labs/pi-fff",
+        "requested_version": null
+      },
+      "source": "npm:@ff-labs/pi-fff",
+      "source_kind": "npm",
+      "trust_state": "trusted"
+    },
+    {
+      "digest_sha256": "cbdf351f42368493c854fe9b2b0753aeadff69017c5f7ddb93380ce66bec990c",
+      "identity": "npm:context-mode",
+      "resolved": {
+        "installed_version": "1.0.169",
+        "kind": "npm",
+        "name": "context-mode",
+        "pinned": false,
+        "requested_spec": "context-mode",
+        "requested_version": null
+      },
+      "source": "npm:context-mode",
+      "source_kind": "npm",
+      "trust_state": "trusted"
+    },
+    {
+      "digest_sha256": "e21354e2e3494f244004c5463b9e3c59beaf4d3b105b833947b3edf2a673613f",
+      "identity": "npm:pi-web-access",
+      "resolved": {
+        "installed_version": "0.22.0",
+        "kind": "npm",
+        "name": "pi-web-access",
+        "pinned": false,
+        "requested_spec": "pi-web-access",
+        "requested_version": null
+      },
+      "source": "npm:pi-web-access",
+      "source_kind": "npm",
+      "trust_state": "trusted"
+    }
+  ],
+  "schema": "pi.package_lock.v1"
+}
