@@ -16,7 +16,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "DeepSeek-V4-Pro-tx",
@@ -26,7 +29,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "Doubao-pro-32k",
@@ -36,7 +42,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "MiniMax-M2.5",
@@ -46,7 +55,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "cd-opus-4.6",
@@ -56,7 +68,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "cd-opus-4.7",
@@ -66,7 +81,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "cd-sonnet-4.6",
@@ -76,7 +94,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-fable-5-q",
@@ -86,7 +107,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-haiku-4-5-20251001",
@@ -96,7 +120,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-opus-4-6",
@@ -106,7 +133,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-opus-4-6-guidor",
@@ -116,7 +146,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-opus-4-7-q",
@@ -126,7 +159,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-opus-4-8-q",
@@ -136,7 +172,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "claude-sonnet-4-6-q",
@@ -146,7 +185,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "deepseek-v3-2-251201",
@@ -156,7 +198,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "deepseek-v4-flash",
@@ -166,7 +211,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "deepseek-v4-pro",
@@ -176,7 +224,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "doubao-seed-2-0-code-preview-260215",
@@ -186,7 +237,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "doubao-seed-2-0-lite-260215",
@@ -196,7 +250,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "doubao-seed-2-0-mini-260215",
@@ -206,7 +263,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "doubao-seed-2-0-pro-260215",
@@ -216,7 +276,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.1-flash-lite-preview",
@@ -226,7 +289,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.1-flash-lite-preview-q",
@@ -236,7 +302,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.1-pro-grsai",
@@ -246,7 +315,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.1-pro-preview",
@@ -256,7 +328,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.1-pro-preview-guidor",
@@ -266,7 +341,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gemini-3.5-flash-q",
@@ -276,7 +354,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "glm-4-7-251222",
@@ -286,7 +367,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "glm-5.1",
@@ -296,7 +380,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "glm-5.2-ali",
@@ -306,7 +393,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "glm-5.2-tx",
@@ -316,7 +406,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-4",
@@ -326,7 +419,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.4",
@@ -336,7 +432,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.4-mini",
@@ -346,7 +445,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.4-quanter",
@@ -356,7 +458,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.5",
@@ -366,7 +471,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.5-quanter",
@@ -376,7 +484,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.5-tx",
@@ -386,7 +497,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.6-luna-quanter",
@@ -396,7 +510,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.6-sol-quanter",
@@ -406,7 +523,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-5.6-terra-quanter",
@@ -416,7 +536,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "gpt-image-2",
@@ -481,7 +604,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "ideogram-instructional-edit",
@@ -502,7 +628,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "kimi-k3-tx",
@@ -512,7 +641,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "nano-banana",
@@ -577,7 +709,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "qwen-turbo",
@@ -587,7 +722,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "qwen3.5-plus",
@@ -597,7 +735,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "qwen3.6-plus",
@@ -607,7 +748,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "qwen3.7-max",
@@ -617,7 +761,10 @@
             "text"
           ],
           "contextWindow": 1000000,
-          "maxTokens": 64000
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
         },
         {
           "id": "text-embedding-v1",
