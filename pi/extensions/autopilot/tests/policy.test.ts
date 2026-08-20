@@ -96,6 +96,15 @@ test("running grants writes inside cwd only; danger filter can be disabled", asy
 		assert.equal(evaluate("bash", builtin("bash"), { command: "npm run build" }).allow, true);
 		assert.equal(evaluate("edit", builtin("edit"), { path: "src/existing.ts" }).allow, true);
 		assert.equal(evaluate("write", builtin("write"), { path: "src/new.ts" }).allow, true);
+		assert.equal(
+			evaluate(
+				"patch",
+				{ name: "patch", sourceInfo: { source: "extension", path: path.resolve(import.meta.dirname, "../../patch/index.ts") } },
+				{ path: "src/existing.ts", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+			).allow,
+			true,
+		);
+		assert.equal(evaluate("patch", unknown("patch"), { path: "src/existing.ts", patch: "..." }).allow, false);
 		// Escapes cwd.
 		assert.equal(evaluate("write", builtin("write"), { path: "../outside.txt" }).allow, false);
 		assert.equal(evaluate("write", builtin("write"), { path: "~/escaped.txt" }).allow, false);

@@ -34,6 +34,10 @@ interface TaskResult {
 	role: string;
 	task: string;
 	label: string;
+	/** 子进程尚未启动、正在运行或已结束。用于区分排队任务和活动任务。 */
+	status: "queued" | "running" | "finished";
+	/** 当前子进程正在调用的只读工具，可能缺失。 */
+	currentAction?: string;
 	exitCode: number;
 	output: string;
 	toolCalls: number;
@@ -107,6 +111,19 @@ function truncate(output: string): string {
 	let cut = output.slice(0, PER_TASK_OUTPUT_CAP);
 	while (Buffer.byteLength(cut, "utf8") > PER_TASK_OUTPUT_CAP) cut = cut.slice(0, -1);
 	return `${cut}\n\n[输出被截断，省略 ${bytes - Buffer.byteLength(cut, "utf8")} 字节]`;
+}
+
+function oneLine(text: string, maxLength: number): string {
+	const normalized = text.replace(/\s+/g, " ").trim();
+	return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+function formatToolActivity(toolName: string, args: unknown): string {
+	if (!args || typeof args !== "object") return toolName;
+	const value = Object.values(args as Record<string, unknown>).find(
+		(entry) => typeof entry === "string" && entry.trim(),
+	);
+	return value ? `${toolName} ${oneLine(String(value), 80)}` : toolName;
 }
 
 function failed(r: TaskResult): boolean {
@@ -190,6 +207,8 @@ async function runTask(
 					GIT_EXTERNAL_DIFF: ":",
 				},
 			});
+			result.status = "running";
+			onProgress();
 
 			let buffer = "";
 			let exited = false;
@@ -200,6 +219,16 @@ async function runTask(
 				try {
 					event = JSON.parse(line);
 				} catch {
+					return;
+				}
+				if (event.type === "tool_execution_start") {
+					result.currentAction = formatToolActivity(event.toolName, event.args);
+					onProgress();
+					return;
+				}
+				if (event.type === "tool_execution_end") {
+					result.currentAction = undefined;
+					onProgress();
 					return;
 				}
 				if (event.type !== "message_end" || !event.message) return;
@@ -259,12 +288,16 @@ async function runTask(
 		});
 
 		if (aborted) result.stopReason = "aborted";
+		result.status = "finished";
+		result.currentAction = undefined;
 		result.durationMs = Date.now() - started;
 		return result;
 	} catch (error) {
 		result.exitCode = 1;
 		result.stopReason = "error";
 		result.errorMessage = error instanceof Error ? error.message : String(error);
+		result.status = "finished";
+		result.currentAction = undefined;
 		result.durationMs = Date.now() - started;
 		return result;
 	} finally {
@@ -379,6 +412,7 @@ export default function (pi: ExtensionAPI) {
 				role: t.role,
 				task: t.task,
 				label: t.label || `${i + 1}`,
+				status: "queued",
 				exitCode: 0,
 				output: "",
 				toolCalls: 0,
@@ -390,8 +424,17 @@ export default function (pi: ExtensionAPI) {
 
 			const emit = () => {
 				const details = { results: [...live], running: live.length - done.size } as Details;
+				const active = live.filter((r) => r.status === "running");
+				const activeText = active.length
+					? `\n正在执行：${oneLine(
+						active
+							.map((r) => `[${r.label}] ${r.task}${r.currentAction ? `（${r.currentAction}）` : ""}`)
+							.join("；"),
+						240,
+					)}`
+					: "";
 				onUpdate?.({
-					content: [{ type: "text", text: `并行执行中：${done.size}/${live.length} 完成` }],
+					content: [{ type: "text", text: `并行执行中：${done.size}/${live.length} 完成${activeText}` }],
 					details,
 				});
 				pi.events.emit("operations-deck:tasks", details);
@@ -441,10 +484,17 @@ export default function (pi: ExtensionAPI) {
 					? `${okCount}/${details.results.length} 完成，${details.running} 进行中`
 					: `${details.results.filter((r) => !failed(r)).length}/${details.results.length} 成功`;
 
+			const active = details.results.filter((r) => r.status === "running");
 			const container = new Container();
 			container.addChild(
 				new Text(theme.fg("toolTitle", theme.bold("parallel_tasks ")) + theme.fg("accent", status), 0, 0),
 			);
+			if (active.length > 0) {
+				const current = active
+					.map((r) => `[${r.label}] ${r.task}${r.currentAction ? `（${r.currentAction}）` : ""}`)
+					.join("；");
+				container.addChild(new Text(theme.fg("muted", `正在执行：${oneLine(current, 240)}`), 0, 0));
+			}
 
 			for (const r of details.results) {
 				const pending = r.durationMs === 0 && details.running > 0;

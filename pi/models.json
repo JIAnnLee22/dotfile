@@ -1,15 +1,36 @@
 {
   "providers": {
-		"openai-codex":{
-			"modelOverrides": {
-				"gpt-5.6-sol":{
-					"contextWindow": 1050000
-				},
-				"gpt-5.6-luna":{
-					"contextWindow": 1050000
-				}
-			}
-		},
+    "agentrouter": {
+      "baseUrl": "https://agentrouter.org",
+      "api": "anthropic-messages",
+      "models": [
+        {
+          "id": "claude-opus-4-8",
+          "name": "claude-opus-4-8"
+        },
+        {
+          "id": "claude-opus-5",
+          "name": "claude-opus-5"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "name": "gpt-5.6-sol"
+        }
+      ],
+      "headers": {
+        "user-agent": "roo-code/1.0"
+      }
+    },
+    "openai-codex": {
+      "modelOverrides": {
+        "gpt-5.6-sol": {
+          "contextWindow": 1050000
+        },
+        "gpt-5.6-luna": {
+          "contextWindow": 1050000
+        }
+      }
+    },
     "vimedia": {
       "name": "vimedia",
       "baseUrl": "https://dn-api-ai.vigame.cn/v1",

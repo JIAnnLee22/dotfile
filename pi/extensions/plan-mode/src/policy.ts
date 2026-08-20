@@ -7,7 +7,9 @@ import { samePlanRef } from "./domain.ts";
 
 const READ_TOOLS = new Set(["read", "grep", "find", "ls"]);
 const WRITE_TOOLS = new Set(["edit", "write"]);
+const PATCH_TOOL = "patch";
 const PROCESS_TOOLS = new Set(["bash"]);
+const PATCH_TOOL_SOURCE = path.resolve(import.meta.dirname, "../../patch/index.ts");
 
 export interface ToolInfoLike {
 	readonly name: string;
@@ -86,7 +88,7 @@ function matchesStepScope(target: string, cwd: string, rawScope: string): boolea
 
 function pathFromInput(toolName: string, input: unknown): string | undefined | null {
 	if (!isRecord(input)) return null;
-	if (toolName === "read" || toolName === "edit" || toolName === "write") {
+	if (toolName === "read" || toolName === "edit" || toolName === "write" || toolName === PATCH_TOOL) {
 		return typeof input.path === "string" ? input.path : null;
 	}
 	if (toolName === "grep" || toolName === "find" || toolName === "ls") {
@@ -97,6 +99,17 @@ function pathFromInput(toolName: string, input: unknown): string | undefined | n
 
 function isExpectedBuiltin(toolName: string, info: ToolInfoLike | undefined): boolean {
 	return info?.name === toolName && info.sourceInfo?.source === "builtin";
+}
+
+function isExpectedWriteTool(toolName: string, info: ToolInfoLike | undefined): boolean {
+	if (WRITE_TOOLS.has(toolName)) return isExpectedBuiltin(toolName, info);
+	return (
+		toolName === PATCH_TOOL &&
+		info?.name === PATCH_TOOL &&
+		info.sourceInfo?.source !== "builtin" &&
+		typeof info.sourceInfo?.path === "string" &&
+		path.resolve(info.sourceInfo.path) === PATCH_TOOL_SOURCE
+	);
 }
 
 function validManagedToolSource(
@@ -162,9 +175,9 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 			: deny(`Read path escapes configured roots: ${target}`);
 	}
 
-	if (WRITE_TOOLS.has(toolName)) {
-		if (!isExpectedBuiltin(toolName, context.toolInfo)) {
-			return deny(`Write tool '${toolName}' is unknown or overrides the built-in implementation`);
+	if (WRITE_TOOLS.has(toolName) || toolName === PATCH_TOOL) {
+		if (!isExpectedWriteTool(toolName, context.toolInfo)) {
+			return deny(`Write tool '${toolName}' is unknown, overridden, or cannot be verified`);
 		}
 		if (state.status !== "executing") return deny(`Write tool denied while state=${state.status}`);
 		if (!context.spec || !context.grant || !state.planRef) return deny("Executing state is missing PlanSpec or ExecutionGrant");
@@ -246,7 +259,7 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 
 export function calculatePolicyDigest(tools: readonly ToolInfoLike[], managedSubmitSourcePath?: string): string {
 	const relevant = tools
-		.filter((tool) => READ_TOOLS.has(tool.name) || WRITE_TOOLS.has(tool.name) || PROCESS_TOOLS.has(tool.name))
+		.filter((tool) => READ_TOOLS.has(tool.name) || WRITE_TOOLS.has(tool.name) || tool.name === PATCH_TOOL || PROCESS_TOOLS.has(tool.name))
 		.map((tool) => ({
 			name: tool.name,
 			sourceInfo: tool.sourceInfo

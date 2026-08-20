@@ -36,7 +36,7 @@ const CONTROL_TOOLS = new Set([SUBMIT_TOOL, REPORT_TOOL, BLOCK_TOOL]);
 const EXTENSION_SOURCE = import.meta.filename;
 const READ_TOOLS = ["read", "grep", "find", "ls"];
 const READONLY_EXT_TOOLS = ["ffgrep", "fffind"];
-const WRITE_TOOLS = ["edit", "write"];
+const WRITE_TOOLS = ["edit", "write", "patch"];
 const PROCESS_TOOLS = ["bash"];
 
 /** Natural-language triggers that arm autopilot from a plain user message (Chinese first, EN aliases). */

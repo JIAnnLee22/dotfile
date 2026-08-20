@@ -126,7 +126,7 @@ export function validateCommand(command: string): string | null {
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
-		if (event.toolName === "write" || event.toolName === "edit") {
+		if (event.toolName === "write" || event.toolName === "edit" || event.toolName === "patch") {
 			return { block: true, reason: "子任务为只读模式，不能修改文件。请把需要改动的内容写进结论，由主会话执行。" };
 		}
 

@@ -175,6 +175,18 @@ test("PM-P0-007 ExecutionGrant restricts built-in writes to current step paths a
 			cwd: f.cwd,
 		};
 		assert.equal(evaluateToolCall({ ...base, input: { path: "src/existing.ts" } }).allow, true);
+		assert.equal(
+			evaluateToolCall({
+				...base,
+				toolName: "patch",
+				toolInfo: {
+					name: "patch",
+					sourceInfo: { source: "extension", path: path.resolve(import.meta.dirname, "../../patch/index.ts") },
+				},
+				input: { path: "src/existing.ts", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+			}).allow,
+			true,
+		);
 		assert.equal(evaluateToolCall({ ...base, input: { path: "src/other.ts" } }).allow, false);
 		assert.equal(evaluateToolCall({ ...base, input: { path: "../escape.ts" } }).allow, false);
 		assert.equal(
