@@ -1,4 +1,15 @@
 -- LSP 服务器配置列表（由 Arch 包管理器手动安装）
+local function root_dir(markers, fallback_to_cwd)
+  return function(bufnr, on_dir)
+    local root = vim.fs.root(bufnr, markers)
+    if root then
+      on_dir(root)
+    elseif fallback_to_cwd then
+      on_dir(vim.fn.getcwd())
+    end
+  end
+end
+
 local servers = {
   -- Lua (lua-language-server)
   lua_ls = {
@@ -28,20 +39,16 @@ local servers = {
   },
 
   -- TypeScript/JavaScript (typescript-language-server)
-  tsserver = {
+  ts_ls = {
     cmd = { "typescript-language-server", "--stdio" },
-    root_dir = function(fname)
-      return require("lspconfig").util.root_pattern("package.json", "tsconfig.json", "jsconfig.json")(fname)
-    end,
+    root_dir = root_dir({ "package.json", "tsconfig.json", "jsconfig.json" }, true),
     single_file_support = true,
   },
 
   -- Tailwind CSS (tailwindcss-language-server)
   tailwindcss = {
     cmd = { "tailwindcss-language-server", "--stdio" },
-    root_dir = function(fname)
-      return require("lspconfig").util.root_pattern("package.json", "tailwind.config.js", "tailwind.config.ts")(fname)
-    end,
+    root_dir = root_dir({ "package.json", "tailwind.config.js", "tailwind.config.ts" }),
   },
 
   -- Markdown (marksman)
@@ -50,7 +57,7 @@ local servers = {
   },
 
   -- YAML (yaml-language-server)
-  yaml_language_server = {
+  yamlls = {
     cmd = { "yaml-language-server", "--stdio" },
     settings = {
       yaml = {
@@ -79,17 +86,13 @@ local servers = {
   -- Rust (rust-analyzer)
   rust_analyzer = {
     cmd = { "rust-analyzer" },
-    root_dir = function(fname)
-      return require("lspconfig").util.root_pattern("Cargo.toml", "rust-toolchain.toml", ".git")(fname)
-    end,
+    root_dir = root_dir({ "Cargo.toml", "rust-toolchain.toml", ".git" }),
   },
 
   -- Go (gopls)
   gopls = {
     cmd = { "gopls" },
-    root_dir = function(fname)
-      return require("lspconfig").util.root_pattern("go.mod", ".git")(fname)
-    end,
+    root_dir = root_dir({ "go.mod", ".git" }),
     settings = {
       gopls = {
         analyses = { unusedparams = true },
@@ -117,16 +120,14 @@ local servers = {
   jdtls = {
     cmd = { "jdtls" },
     filetypes = { "java", "kotlin" },
-    root_dir = function(fname)
-      return require("lspconfig").util.root_pattern(
-        "build.gradle",
-        "build.gradle.kts",
-        "settings.gradle",
-        "settings.gradle.kts",
-        "pom.xml",
-        ".git"
-      )(fname)
-    end,
+    root_dir = root_dir({
+      "build.gradle",
+      "build.gradle.kts",
+      "settings.gradle",
+      "settings.gradle.kts",
+      "pom.xml",
+      ".git",
+    }),
     settings = {
       java = {
         jdk = { release = 17 },
