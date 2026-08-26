@@ -1,37 +1,3 @@
----@brief
----
---- https://projects.eclipse.org/projects/eclipse.jdt.ls
----
---- Language server for Java.
----
---- IMPORTANT: If you want all the features jdtls has to offer, [nvim-jdtls](https://github.com/mfussenegger/nvim-jdtls)
---- is highly recommended. If all you need is diagnostics, completion, imports, gotos and formatting and some code actions
---- you can keep reading here.
----
---- For manual installation you can download precompiled binaries from the
---- [official downloads site](http://download.eclipse.org/jdtls/snapshots/?d)
---- and ensure that the `PATH` variable contains the `bin` directory of the extracted archive.
----
---- ```lua
----   -- init.lua
----   vim.lsp.enable('jdtls')
---- ```
----
---- You can also pass extra custom jvm arguments with the JDTLS_JVM_ARGS environment variable as a space separated list of arguments,
---- that will be converted to multiple --jvm-arg=<param> args when passed to the jdtls script. This will allow for example tweaking
---- the jvm arguments or integration with external tools like lombok:
----
---- ```sh
---- export JDTLS_JVM_ARGS="-javaagent:$HOME/.local/share/java/lombok.jar"
---- ```
----
---- For automatic installation you can use the following unofficial installers/launchers under your own risk:
----   - [jdtls-launcher](https://github.com/eruizc-dev/jdtls-launcher) (Includes lombok support by default)
----     ```lua
----       -- init.lua
----       vim.lsp.config('jdtls', { cmd = { 'jdtls' } })
----     ```
-
 local function get_jdtls_cache_dir()
   return vim.fn.stdpath('cache') .. '/jdtls'
 end
@@ -50,24 +16,49 @@ local function get_jdtls_jvm_args()
   return unpack(args)
 end
 
+local function find_java_executable()
+  -- 1) vim.g.java_home / JAVA_HOME
+  local g_home = vim.g.java_home or os.getenv('JAVA_HOME')
+  if g_home and g_home ~= '' then
+    local cand = g_home:gsub('/+$', '') .. '/bin/java'
+    if vim.fn.executable(cand) == 1 then return cand end
+  end
+  -- 2) 常见 jvm 安装位按版本降序探测 (需要 >=21)
+  local candidates = {
+    '/usr/lib/jvm/java-21-openjdk/bin/java',
+    '/usr/lib/jvm/java-26-openjdk/bin/java',
+    '/usr/lib/jvm/default-runtime/bin/java',
+    '/usr/lib/jvm/java-17-openjdk/bin/java',
+    '/usr/lib/jvm/java-11-openjdk/bin/java',
+  }
+  for _, p in ipairs(candidates) do
+    if vim.fn.executable(p) == 1 then
+      local ver_out = vim.fn.system({ p, '-version' })
+      -- java -version 输出到 stderr，system 会合并；检查 >=21
+      local major = ver_out:match('\"(%d+)%.') or ver_out:match('\"(%d+)\"') or ver_out:match('version \"(%d+)')
+      major = tonumber(major) or 0
+      -- Java 9+ 版本号为 9,11,17,21...；8 以前为 1.8
+      if major >= 21 then return p end
+    end
+  end
+  -- 3) 回落到 PATH 中的 java，若版本足够则用，否则仍返回它让 jdtls 报错提示
+  local path_java = vim.fn.exepath('java')
+  if path_java ~= '' then return path_java end
+  return 'java'
+end
+
 local root_markers1 = {
-  -- Multi-module projects
-  'mvnw', -- Maven
-  'gradlew', -- Gradle
-  'settings.gradle', -- Gradle
-  'settings.gradle.kts', -- Gradle
-  -- Use git directory as last resort for multi-module maven projects
-  -- In multi-module maven projects it is not really possible to determine what is the parent directory
-  -- and what is submodule directory. And jdtls does not break if the parent directory is at higher level than
-  -- actual parent pom.xml so propagating all the way to root git directory is fine
+  'mvnw',
+  'gradlew',
+  'settings.gradle',
+  'settings.gradle.kts',
   '.git',
 }
 local root_markers2 = {
-  -- Single-module projects
-  'build.xml', -- Ant
-  'pom.xml', -- Maven
-  'build.gradle', -- Gradle
-  'build.gradle.kts', -- Gradle
+  'build.xml',
+  'pom.xml',
+  'build.gradle',
+  'build.gradle.kts',
 }
 
 ---@type vim.lsp.Config
@@ -77,18 +68,16 @@ return {
   cmd = function(dispatchers, config)
     local workspace_dir = get_jdtls_workspace_dir()
     local data_dir = workspace_dir
-
     if config.root_dir then
       data_dir = data_dir .. '/' .. vim.fn.fnamemodify(config.root_dir, ':p:h:t')
     end
-
+    local java_exec = find_java_executable()
     local config_cmd = {
       'jdtls',
-      '-data',
-      data_dir,
+      '--java-executable', java_exec,
+      '-data', data_dir,
       get_jdtls_jvm_args(),
     }
-
     return vim.lsp.rpc.start(config_cmd, dispatchers, {
       cwd = config.cmd_cwd,
       env = config.cmd_env,

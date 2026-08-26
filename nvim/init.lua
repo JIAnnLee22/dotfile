@@ -2,6 +2,7 @@ vim.g.mapleader = " "
 
 require("options")
 require("lsp")
+require("android").setup()
 require("colorscheme")
 require("netrw")
 require("statusline")
