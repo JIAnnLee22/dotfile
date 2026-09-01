@@ -7,3 +7,5 @@ vim.o.undofile = true
 vim.o.autoread = true
 vim.o.laststatus = 3
 vim.o.cmdheight = 0
+vim.o.swapfile = false
+vim.o.clipboard = "unnamedplus"
