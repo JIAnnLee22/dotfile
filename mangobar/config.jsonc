@@ -41,8 +41,8 @@
     },
     "window": {
         "format": "{}",
-        "on-click": "bash ~/.config/mango/scripts/screenshot.sh",
-        "on-click-right": "python /home/wrq/tool/ocr.py"
+        "on-click": "mango-screenshot",
+        "on-click-right": ""
     },
 
     "network": {
@@ -61,8 +61,8 @@
     "backlight": {
         "format": "{icon} {percent}%",
         "icons": ["󰃚", "󰃛", "󰃜", "󰃝", "󰃞", "󰃟"],
-        "on-scroll-up": "bash ~/.config/mango/scripts/brightness.sh bup",
-        "on-scroll-down": "bash ~/.config/mango/scripts/brightness.sh bdown",
+        "on-scroll-up": "brightnessctl s +5%",
+        "on-scroll-down": "brightnessctl s 5%-",
         "on-click": "brightnessctl set 1%"
     },
     "pulseaudio": {
@@ -95,7 +95,6 @@
 
     "custom/power": {
         "format": "󰣇",
-        "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l ~/.config/mango/wlogout/layout -b 6 --protocol layer-shell",
-        "on-click-right": "sleep 0.1s && swaync-client -t -sw"
+        "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l ~/.config/mango/wlogout/layout -b 6 --protocol layer-shell"
     }
 }
