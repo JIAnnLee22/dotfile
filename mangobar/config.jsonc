@@ -6,6 +6,7 @@
     // "scroll-interval": 100,
     // "smooth-scrolling-threshold": 5.0,
 
+    // Global default: used by any output not listed below.
     "modules-left": [
         "workspaces",
         "layout",
@@ -27,7 +28,6 @@
         "clock#time",
         "custom/power"
     ],
-
     "workspaces": {
         "hide-empty": true,
         // "pinned": [1, 2],
@@ -41,7 +41,7 @@
     },
     "window": {
         "format": "{}",
-        "on-click": "mango-screenshot",
+        "on-click": "",
         "on-click-right": ""
     },
 
@@ -93,6 +93,43 @@
         "spacing": 10
     },
 
+    "custom/power": {
+        "format": "󰣇",
+        "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l ~/.config/mango/wlogout/layout -b 6 --protocol layer-shell"
+    }
+},
+{
+    "output": "HDMI-A-1",
+    "modules-left": [
+        "workspaces",
+        "layout",
+        "window"
+    ],
+    "modules-center": [],
+    "modules-right": [
+        "tray",
+        "custom/power"
+    ],
+    "workspaces": {
+        "hide-empty": true,
+        // "pinned": [1, 2],
+        // "tag-names": ["1", "2", "3", "编", "网"],
+        "overview-label": "OVERVIEW",
+        "on-click": "activate",
+        "on-click-right": "toggle"
+    },
+    "layout": {
+        "format": "{}"
+    },
+    "window": {
+        "format": "{}",
+        "on-click": "",
+        "on-click-right": ""
+    },
+    "tray": {
+        "icon-size": 25,
+        "spacing": 10
+    },
     "custom/power": {
         "format": "󰣇",
         "on-click": "wlogout -C ~/.config/mango/wlogout/style.css -l ~/.config/mango/wlogout/layout -b 6 --protocol layer-shell"
