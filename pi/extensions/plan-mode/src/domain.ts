@@ -1,24 +1,29 @@
-export const PLAN_SCHEMA = "dev.pi.plan/v1" as const;
-export const STATE_SCHEMA = "dev.pi.plan-state/v1" as const;
-export const AUDIT_SCHEMA = "dev.pi.plan-audit/v1" as const;
-export const ACTION_PROTOCOL = "dev.pi.plan-action/v1" as const;
+export const PLAN_SCHEMA = "dev.pi.plan/v2" as const;
+export const STATE_SCHEMA = "dev.pi.plan-state/v2" as const;
+export const AUDIT_SCHEMA = "dev.pi.plan-audit/v2" as const;
+export const ACTION_PROTOCOL = "dev.pi.plan-action/v2" as const;
 export const SECURITY_LEVEL = "agent-tools-only" as const;
 
 export type PlanStatus =
 	| "inactive"
-	| "researching"
+	| "planning"
 	| "awaiting_input"
 	| "review"
-	| "approved"
-	| "executing"
+	| "implementing"
 	| "paused"
 	| "completed"
-	| "rejected"
 	| "cancelled"
 	| "stale"
 	| "failed";
 
-export type Capability = "fs.read" | "fs.write" | "process.exec";
+export type ResearchCapability =
+	| "workspace.read"
+	| "metadata.read"
+	| "network.read"
+	| "managed.index.write"
+	| "fs.write"
+	| "process.exec"
+	| "external.mutate";
 
 export type ActorChannel = "model" | "tui" | "print" | "json" | "rpc" | "sdk" | "cli" | "system";
 
@@ -40,34 +45,30 @@ export interface PlanScope {
 	readonly ephemeralSession: boolean;
 }
 
-export interface PlanStepSpec {
-	readonly id: string;
+export interface ImportedPlanRef extends PlanRef {
+	readonly schema: "dev.pi.plan/v1";
+}
+
+export interface PlanStepDraft {
 	readonly title: string;
-	readonly purpose: string;
 	readonly actions: readonly string[];
-	/** Read dependencies whose drift can invalidate approval; exact paths or directory roots ending in '/'. */
-	readonly dependencyScopes?: readonly string[];
-	/** Mutation authorization only; project-relative exact paths or directory roots ending in '/'. */
-	readonly pathScopes: readonly string[];
-	readonly requiredCapabilities: readonly Capability[];
-	readonly acceptance: readonly string[];
-	readonly rollback: readonly string[];
+	/** Informational implementation paths, not an authorization boundary. */
+	readonly files?: readonly string[];
+	/** Human-readable checks or commands, not automatically executed by the controller. */
+	readonly validation?: readonly string[];
 }
 
-export interface WorkspaceSnapshotEntry {
-	readonly path: string;
-	readonly kind: "missing" | "file" | "directory";
-	readonly size?: number;
-	readonly contentHash?: string;
+export interface PlanDraft {
+	readonly goal: string;
+	readonly decisions?: readonly string[];
+	readonly steps: readonly PlanStepDraft[];
+	readonly risks?: readonly string[];
 }
 
-export interface WorkspaceSnapshot {
-	readonly schema: "dev.pi.workspace-snapshot/v1";
-	readonly capturedAt: string;
-	readonly scopes: readonly string[];
-	readonly entries: readonly WorkspaceSnapshotEntry[];
-	readonly totalBytes: number;
-	readonly digest: string;
+export interface PlanStepSpec extends PlanStepDraft {
+	readonly id: string;
+	readonly files: readonly string[];
+	readonly validation: readonly string[];
 }
 
 export interface PlanSpec {
@@ -75,30 +76,20 @@ export interface PlanSpec {
 	readonly planId: string;
 	readonly version: number;
 	readonly parentVersion: number | null;
+	readonly importedFrom?: ImportedPlanRef;
+	readonly forkedFrom?: PlanRef;
 	readonly createdAt: string;
 	readonly createdBy: Actor;
 	readonly goal: string;
-	readonly facts: readonly string[];
-	readonly assumptions: readonly string[];
+	readonly decisions: readonly string[];
 	readonly scope: PlanScope;
 	readonly steps: readonly PlanStepSpec[];
 	readonly risks: readonly string[];
-	readonly policyDigest: string;
-	readonly contextDigest: string;
-	readonly workspaceSnapshot?: WorkspaceSnapshot;
 	readonly contentHash: string;
 }
 
-export interface PlanDraft {
-	readonly goal: string;
-	readonly facts?: readonly string[];
-	readonly assumptions?: readonly string[];
-	readonly steps: readonly PlanStepSpec[];
-	readonly risks?: readonly string[];
-}
-
 export interface ApprovalRecord {
-	readonly schema: "dev.pi.plan-approval/v1";
+	readonly schema: "dev.pi.plan-approval/v2";
 	readonly approvalId: string;
 	readonly nonce: string;
 	readonly planRef: PlanRef;
@@ -106,51 +97,59 @@ export interface ApprovalRecord {
 	readonly approvedAt: string;
 	readonly sessionId: string;
 	readonly branchEntryId: string | null;
+	readonly activeToolsDigest: string;
 }
 
-export interface GrantStepScope {
-	readonly stepId: string;
-	readonly capabilities: readonly Capability[];
-	readonly pathScopes: readonly string[];
-}
+export type ResearchPermissionDecision = "allow" | "deny";
 
-export interface ExecutionGrant {
-	readonly schema: "dev.pi.plan-grant/v1";
-	readonly grantId: string;
-	readonly approvalId: string;
-	readonly planRef: PlanRef;
-	readonly issuedTo: Actor;
-	readonly issuedAt: string;
-	readonly expiresAt?: string;
-	readonly policyDigest: string;
-	readonly contextDigest: string;
-	readonly workspaceDigest?: string;
+export interface ResearchPermissionRecord {
+	readonly schema: "dev.pi.plan-research-permission/v2";
+	readonly permissionId: string;
+	readonly planId: string;
+	readonly toolName: string;
+	readonly capabilities: readonly ResearchCapability[];
+	readonly sourceDigest: string;
+	readonly decision: ResearchPermissionDecision;
+	readonly subject: Actor;
+	readonly decidedAt: string;
 	readonly sessionId: string;
 	readonly branchEntryId: string | null;
-	readonly epoch: number;
-	readonly steps: readonly GrantStepScope[];
 }
 
-export type StepStatus = "pending" | "running" | "verified" | "failed";
+export interface ToolBaselineRecord {
+	readonly schema: "dev.pi.plan-tool-baseline/v2";
+	readonly baselineId: string;
+	readonly planId: string;
+	readonly toolNames: readonly string[];
+	readonly capturedAt: string;
+	readonly sessionId: string;
+	readonly branchEntryId: string | null;
+}
+
+export type StepStatus = "pending" | "running" | "completed" | "failed";
 
 export interface StepExecutionState {
 	readonly status: StepStatus;
+	readonly reportIds: readonly string[];
 	readonly evidenceIds: readonly string[];
+	readonly summary?: string;
 	readonly reason?: string;
 }
 
 export interface ExecutionState {
 	readonly schema: typeof STATE_SCHEMA;
 	readonly status: PlanStatus;
-	readonly epoch: number;
+	readonly revision: number;
+	readonly runRevision: number;
+	readonly stepRevision: number;
 	readonly planId?: string;
 	readonly planRef?: PlanRef;
 	readonly approvalId?: string;
-	readonly grantId?: string;
+	readonly baselineId?: string;
 	readonly currentStepId?: string;
 	readonly steps: Readonly<Record<string, StepExecutionState>>;
 	readonly pendingInput?: {
-		readonly kind: string;
+		readonly kind: "text" | "select";
 		readonly prompt: string;
 		readonly choices?: readonly string[];
 	};
@@ -160,10 +159,10 @@ export interface ExecutionState {
 	readonly updatedAt: string;
 }
 
-export type EvidenceKind = "tool-result" | "verification" | "user-confirmation";
+export type EvidenceKind = "tool-result" | "step-report";
 
 export interface EvidenceRecord {
-	readonly schema: "dev.pi.plan-evidence/v1";
+	readonly schema: "dev.pi.plan-evidence/v2";
 	readonly evidenceId: string;
 	readonly planRef: PlanRef;
 	readonly stepId: string;
@@ -187,7 +186,7 @@ export interface AuditEvent {
 	readonly sessionId: string;
 	readonly branchLeafId: string | null;
 	readonly planRef?: PlanRef;
-	readonly epoch: number;
+	readonly revision: number;
 	readonly actor: Actor;
 	readonly action: string;
 	readonly decision: AuditDecision;
@@ -197,6 +196,8 @@ export interface AuditEvent {
 	readonly data?: unknown;
 }
 
+export type ReviewDecision = "implement" | "edit_feedback" | "continue_planning" | "cancel";
+
 export type PlanAction =
 	| "start"
 	| "request_input"
@@ -205,19 +206,17 @@ export type PlanAction =
 	| "status"
 	| "show"
 	| "diff"
-	| "edit"
-	| "approve"
+	| "continue_planning"
+	| "edit_feedback"
+	| "implement"
 	| "run"
-	| "execute"
 	| "complete_step"
-	| "reject"
+	| "block"
 	| "pause"
 	| "resume"
-	| "verify"
 	| "cancel"
-	| "reset"
 	| "audit"
-	| "export";
+	| "migrate_v1";
 
 export interface PlanActionRequest {
 	readonly protocolVersion: typeof ACTION_PROTOCOL;
@@ -235,7 +234,9 @@ export type PlanErrorCode =
 	| "BUSY"
 	| "PLAN_REF_MISMATCH"
 	| "APPROVAL_REQUIRED"
-	| "GRANT_SCOPE_DENIED"
+	| "TOOL_UNAVAILABLE"
+	| "PERMISSION_REQUIRED"
+	| "SOURCE_MISMATCH"
 	| "STALE"
 	| "UI_REQUIRED"
 	| "STORAGE_ERROR"
@@ -255,20 +256,13 @@ export interface PlanActionResult {
 	readonly state: ExecutionState;
 	readonly planRef?: PlanRef;
 	readonly approvalRef?: string;
-	readonly grantRef?: string;
-	readonly pendingInput?: {
-		readonly kind: string;
-		readonly prompt: string;
-		readonly choices?: readonly string[];
-	};
+	readonly pendingInput?: ExecutionState["pendingInput"];
 	readonly data?: unknown;
 	readonly error?: PlanError;
 }
 
 export interface ActionEnvironment {
 	readonly scope: PlanScope;
-	readonly policyDigest: string;
-	readonly contextDigest: string;
 	readonly goal?: string;
 	readonly draft?: PlanDraft;
 	readonly reason?: string;
@@ -276,16 +270,22 @@ export interface ActionEnvironment {
 	readonly note?: string;
 	readonly question?: string;
 	readonly choices?: readonly string[];
-	readonly workspaceSnapshot?: WorkspaceSnapshot;
+	readonly feedback?: string;
 	readonly fromVersion?: number;
 	readonly toVersion?: number;
+	readonly activeTools?: readonly string[];
+	readonly activeToolsDigest?: string;
+	readonly baseline?: ToolBaselineRecord;
+	readonly importedFrom?: ImportedPlanRef;
 }
 
 export function createInitialState(now = new Date().toISOString(), ephemeralSession = false): ExecutionState {
 	return {
 		schema: STATE_SCHEMA,
 		status: "inactive",
-		epoch: 0,
+		revision: 0,
+		runRevision: 0,
+		stepRevision: 0,
 		steps: {},
 		securityLevel: SECURITY_LEVEL,
 		ephemeralSession,

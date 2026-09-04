@@ -1,13 +1,6 @@
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import {
-	PLAN_SCHEMA,
-	type Capability,
-	type PlanDraft,
-	type PlanRef,
-	type PlanSpec,
-	samePlanRef,
-} from "./domain.ts";
+import { PLAN_SCHEMA, type PlanDraft, type PlanRef, type PlanSpec, type PlanStepSpec, samePlanRef } from "./domain.ts";
 
 function canonicalValue(value: unknown, seen: Set<object>): unknown {
 	if (value === null || typeof value === "string" || typeof value === "boolean") return value;
@@ -47,11 +40,11 @@ export function sha256(value: string | Uint8Array): string {
 	return createHash("sha256").update(value).digest("hex");
 }
 
-export function calculatePlanHash(spec: Omit<PlanSpec, "contentHash"> | PlanSpec): string {
-	const { contentHash: _ignored, ...hashable } = spec as PlanSpec;
-	return sha256(canonicalJson(hashable));
+export function comparePaths(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
 }
 
+/** Shared path normalizer retained for autopilot and legacy-v1 compatibility. */
 export function normalizePathScope(value: string): string {
 	const trimmed = value.trim().replaceAll("\\", "/");
 	if (!trimmed) throw new TypeError("Path scope must not be empty");
@@ -76,32 +69,60 @@ export function normalizePathScope(value: string): string {
 	return `${normalized}${directory ? "/" : ""}`;
 }
 
-function normalizeStrings(values: readonly string[] | undefined): string[] {
-	return (values ?? []).map((value) => value.trim()).filter(Boolean);
+function normalizeStrings(values: readonly string[] | undefined, limit: number, label: string): string[] {
+	const normalized = (values ?? []).map((value) => value.trim()).filter(Boolean);
+	if (normalized.length > limit) throw new TypeError(`${label} exceeds ${limit} entries`);
+	for (const value of normalized) {
+		if (value.length > 4096) throw new TypeError(`${label} entry exceeds 4096 characters`);
+	}
+	return normalized;
 }
 
-function normalizeCapabilities(values: readonly Capability[]): Capability[] {
-	return [...new Set(values)];
+function normalizeFiles(values: readonly string[] | undefined): string[] {
+	const files = [...new Set((values ?? []).map(normalizePathScope))];
+	if (files.length > 128) throw new TypeError("step files exceed 128 entries");
+	return files;
 }
 
 export function normalizeDraft(draft: PlanDraft): PlanDraft {
+	const goal = draft.goal.trim();
+	if (!goal) throw new TypeError("Plan goal is required");
+	if (goal.length > 16_384) throw new TypeError("Plan goal exceeds 16384 characters");
+	if (!Array.isArray(draft.steps) || draft.steps.length === 0) throw new TypeError("At least one plan step is required");
+	if (draft.steps.length > 128) throw new TypeError("Plan steps exceed 128 entries");
 	return {
-		goal: draft.goal.trim(),
-		facts: normalizeStrings(draft.facts),
-		assumptions: normalizeStrings(draft.assumptions),
-		steps: draft.steps.map((step) => ({
-			id: step.id.trim(),
-			title: step.title.trim(),
-			purpose: step.purpose.trim(),
-			actions: normalizeStrings(step.actions),
-			dependencyScopes: [...new Set((step.dependencyScopes ?? []).map(normalizePathScope))],
-			pathScopes: [...new Set(step.pathScopes.map(normalizePathScope))],
-			requiredCapabilities: normalizeCapabilities(step.requiredCapabilities),
-			acceptance: normalizeStrings(step.acceptance),
-			rollback: normalizeStrings(step.rollback),
-		})),
-		risks: normalizeStrings(draft.risks),
+		goal,
+		decisions: normalizeStrings(draft.decisions, 256, "decisions"),
+		steps: draft.steps.map((step, index) => {
+			const title = step.title.trim();
+			if (!title) throw new TypeError(`steps[${index}].title is required`);
+			if (title.length > 1024) throw new TypeError(`steps[${index}].title exceeds 1024 characters`);
+			const actions = normalizeStrings(step.actions, 256, `steps[${index}].actions`);
+			if (actions.length === 0) throw new TypeError(`steps[${index}].actions must not be empty`);
+			return {
+				title,
+				actions,
+				files: normalizeFiles(step.files),
+				validation: normalizeStrings(step.validation, 256, `steps[${index}].validation`),
+			};
+		}),
+		risks: normalizeStrings(draft.risks, 256, "risks"),
 	};
+}
+
+export function materializeSteps(draft: PlanDraft): PlanStepSpec[] {
+	return draft.steps.map((step, index) => ({
+		id: `S${index + 1}`,
+		title: step.title,
+		actions: step.actions,
+		files: step.files ?? [],
+		validation: step.validation ?? [],
+	}));
+}
+
+export function calculatePlanHash(spec: Omit<PlanSpec, "contentHash"> | PlanSpec): string {
+	const { contentHash: _ignored, ...hashable } = spec as PlanSpec;
+	return sha256(canonicalJson(hashable));
 }
 
 export function validatePlanSpec(spec: PlanSpec): string[] {
@@ -112,78 +133,41 @@ export function validatePlanSpec(spec: PlanSpec): string[] {
 	if (spec.parentVersion !== null && (!Number.isInteger(spec.parentVersion) || spec.parentVersion >= spec.version)) {
 		errors.push("parentVersion must be null or lower than version");
 	}
-	if (!spec.goal.trim()) errors.push("goal is required");
-	if (spec.goal.length > 16_384) errors.push("goal exceeds 16384 characters");
-	if (!path.isAbsolute(spec.scope.cwd)) errors.push("scope.cwd must be absolute");
-	if (spec.steps.length === 0) errors.push("at least one step is required");
-	if (spec.steps.length > 128) errors.push("steps exceed the limit of 128");
-	if (spec.facts.length > 256 || spec.assumptions.length > 256 || spec.risks.length > 256) {
-		errors.push("facts, assumptions or risks exceed the limit of 256 entries");
+	if (!Number.isFinite(Date.parse(spec.createdAt))) errors.push("createdAt must be an RFC3339 timestamp");
+	if (!spec.goal?.trim()) errors.push("goal is required");
+	if ((spec.goal?.length ?? 0) > 16_384) errors.push("goal exceeds 16384 characters");
+	if (!path.isAbsolute(spec.scope?.cwd ?? "")) errors.push("scope.cwd must be absolute");
+	if (!Array.isArray(spec.decisions) || spec.decisions.length > 256) errors.push("decisions must contain at most 256 entries");
+	if (!Array.isArray(spec.risks) || spec.risks.length > 256) errors.push("risks must contain at most 256 entries");
+	if (!Array.isArray(spec.steps) || spec.steps.length === 0 || spec.steps.length > 128) {
+		errors.push("steps must contain between 1 and 128 entries");
 	}
+	if (spec.importedFrom) {
+		if (spec.importedFrom.schema !== "dev.pi.plan/v1") errors.push("importedFrom schema must be dev.pi.plan/v1");
+		if (!spec.importedFrom.planId || !Number.isInteger(spec.importedFrom.version) || !spec.importedFrom.contentHash) {
+			errors.push("importedFrom must contain a complete legacy PlanRef");
+		}
+	}
+	if (spec.forkedFrom && (!spec.forkedFrom.planId || !Number.isInteger(spec.forkedFrom.version) || !spec.forkedFrom.contentHash)) {
+		errors.push("forkedFrom must contain a complete PlanRef");
+	}
+	if (spec.importedFrom && spec.forkedFrom) errors.push("PlanSpec cannot contain both importedFrom and forkedFrom");
 	const ids = new Set<string>();
-	for (const [index, step] of spec.steps.entries()) {
-		if (!step.id) errors.push(`steps[${index}].id is required`);
+	for (const [index, step] of (spec.steps ?? []).entries()) {
+		if (!/^S[1-9]\d*$/.test(step.id)) errors.push(`steps[${index}].id must be generated as S<n>`);
 		if (ids.has(step.id)) errors.push(`duplicate step id: ${step.id}`);
 		ids.add(step.id);
-		if (!step.title) errors.push(`steps[${index}].title is required`);
-		if (!step.purpose) errors.push(`steps[${index}].purpose is required`);
-		if (step.actions.length === 0) errors.push(`steps[${index}].actions must not be empty`);
-		if (step.acceptance.length === 0) errors.push(`steps[${index}].acceptance must not be empty`);
-		for (const capability of step.requiredCapabilities) {
-			if (capability !== "fs.read" && capability !== "fs.write" && capability !== "process.exec") {
-				errors.push(`steps[${index}] contains unsupported capability: ${String(capability)}`);
-			}
-		}
-		if (step.requiredCapabilities.includes("fs.write") && step.pathScopes.length === 0) {
-			errors.push(`steps[${index}] requests fs.write without pathScopes`);
-		}
-		if (step.pathScopes.length > 128) errors.push(`steps[${index}] exceeds 128 pathScopes`);
-		if ((step.dependencyScopes?.length ?? 0) > 128) errors.push(`steps[${index}] exceeds 128 dependencyScopes`);
-		if (step.actions.length > 256 || step.acceptance.length > 256 || step.rollback.length > 256) {
-			errors.push(`steps[${index}] actions, acceptance or rollback exceed 256 entries`);
-		}
-		for (const [kind, scopes] of [
-			["dependency", step.dependencyScopes ?? []],
-			["mutation", step.pathScopes],
-		] as const) {
-			for (const scope of scopes) {
-				try {
-					if (normalizePathScope(scope) !== scope) errors.push(`steps[${index}] ${kind} scope is not canonical: ${scope}`);
-				} catch (error) {
-					errors.push(error instanceof Error ? error.message : String(error));
-				}
-			}
-		}
-	}
-	if (spec.workspaceSnapshot) {
-		const snapshot = spec.workspaceSnapshot;
-		if (snapshot.schema !== "dev.pi.workspace-snapshot/v1") errors.push("unsupported workspace snapshot schema");
-		if (!Number.isFinite(Date.parse(snapshot.capturedAt))) errors.push("workspace snapshot capturedAt is invalid");
-		if (snapshot.scopes.length > 64) errors.push("workspace snapshot exceeds 64 scopes");
-		if (snapshot.entries.length > 2_000) errors.push("workspace snapshot exceeds 2000 entries");
-		if (!Number.isSafeInteger(snapshot.totalBytes) || snapshot.totalBytes < 0 || snapshot.totalBytes > 32 * 1024 * 1024) {
-			errors.push("workspace snapshot totalBytes is invalid");
-		}
-		for (const scope of snapshot.scopes) {
+		if (!step.title?.trim()) errors.push(`steps[${index}].title is required`);
+		if (!Array.isArray(step.actions) || step.actions.length === 0) errors.push(`steps[${index}].actions must not be empty`);
+		if (!Array.isArray(step.files) || step.files.length > 128) errors.push(`steps[${index}].files is invalid`);
+		if (!Array.isArray(step.validation) || step.validation.length > 256) errors.push(`steps[${index}].validation is invalid`);
+		for (const file of step.files ?? []) {
 			try {
-				if (normalizePathScope(scope) !== scope) errors.push(`workspace dependency scope is not canonical: ${scope}`);
+				if (normalizePathScope(file) !== file) errors.push(`steps[${index}].file is not canonical: ${file}`);
 			} catch (error) {
 				errors.push(error instanceof Error ? error.message : String(error));
 			}
 		}
-		const paths = snapshot.entries.map((entry) => entry.path);
-		if (new Set(paths).size !== paths.length || canonicalJson(paths) !== canonicalJson([...paths].sort())) {
-			errors.push("workspace snapshot entries must have unique sorted paths");
-		}
-		const expectedSnapshotDigest = sha256(
-			canonicalJson({
-				schema: snapshot.schema,
-				scopes: snapshot.scopes,
-				entries: snapshot.entries,
-				totalBytes: snapshot.totalBytes,
-			}),
-		);
-		if (snapshot.digest !== expectedSnapshotDigest) errors.push("workspace snapshot digest mismatch");
 	}
 	try {
 		const expected = calculatePlanHash(spec);

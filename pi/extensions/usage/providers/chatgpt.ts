@@ -69,9 +69,9 @@ type RateLimitPayload = {
 function windowLabel(win: Record<string, unknown> | undefined, fallback: string): string {
 	const secs = asNumber(win?.limit_window_seconds);
 	if (secs !== undefined) {
-		if (secs <= 6 * 3600) return "5小时"; // 3-6h 都视为 5h 窗口
-		if (secs >= 6 * 24 * 3600) return "周  ";
-		if (secs >= 23 * 3600) return "日  ";
+		if (secs <= 6 * 3600) return "5时"; // 3-6h 都视为 5h 窗口
+		if (secs >= 6 * 24 * 3600) return "周 ";
+		if (secs >= 23 * 3600) return "日 ";
 		return `${Math.round(secs / 3600)}小时`;
 	}
 	return fallback;

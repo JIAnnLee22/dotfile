@@ -5,6 +5,13 @@ import * as path from "node:path";
 import { calculatePlanHash, canonicalJson, sha256, validatePlanSpec } from "./canonical.ts";
 import type { PlanRef, PlanSpec } from "./domain.ts";
 import { samePlanRef } from "./domain.ts";
+import {
+	calculateLegacyPlanHash,
+	isLegacyPlanSpec,
+	legacyPlanRef,
+	validateLegacyPlanSpec,
+	type LegacyPlanSpec,
+} from "./legacy-v1.ts";
 
 const SAFE_ID = /^[0-9a-f-]{16,}$/i;
 
@@ -13,6 +20,8 @@ export interface ArtifactPaths {
 	readonly spec: string;
 	readonly review: string;
 }
+
+export type StoredPlanSpec = PlanSpec | LegacyPlanSpec;
 
 export class ArtifactStoreError extends Error {
 	readonly causeValue?: unknown;
@@ -33,32 +42,25 @@ export function renderPlanMarkdown(spec: PlanSpec): string {
 		.map(
 			(step) => `### ${step.id}：${step.title}
 
-- 目的：${step.purpose}
-- 能力：${step.requiredCapabilities.join(", ") || "fs.read"}
-- 依赖范围：${step.dependencyScopes?.join(", ") || "（未声明依赖）"}
-- 变更范围：${step.pathScopes.join(", ") || "（无写路径）"}
-
 #### 操作
 ${markdownList(step.actions)}
 
-#### 验收
-${markdownList(step.acceptance)}
+#### 涉及文件
+${markdownList(step.files, "- （未指定）")}
 
-#### 回滚
-${markdownList(step.rollback)}`,
+#### 验证
+${markdownList(step.validation, "- （由实施者按实际情况验证）")}`,
 		)
 		.join("\n\n");
 	return `# Plan: ${spec.goal}
 
 > PlanRef: \`${spec.planId}@${spec.version}:${spec.contentHash}\`
-> Security: \`agent-tools-only\`
+> Schema: \`${spec.schema}\`
+> Security: planning is \`agent-tools-only\`; implementation restores normal Pi permissions.
 > This Markdown file is a review projection. \`spec.json\` is authoritative.
 
-## 已确认事实
-${markdownList(spec.facts)}
-
-## 假设与待确认问题
-${markdownList(spec.assumptions)}
+## 关键决策
+${markdownList(spec.decisions)}
 
 ## 实施步骤
 
@@ -72,10 +74,45 @@ ${markdownList(spec.risks)}
 - cwd: \`${spec.scope.cwd}\`
 - session: \`${spec.scope.sessionId}\`
 - branch: \`${spec.scope.branchLeafId ?? "none"}\`
-- policyDigest: \`${spec.policyDigest}\`
-- contextDigest: \`${spec.contextDigest}\`
-- workspaceDigest: \`${spec.workspaceSnapshot?.digest ?? "not-captured"}\`
-- workspaceEntries: ${spec.workspaceSnapshot?.entries.length ?? 0}
+- importedFrom: \`${spec.importedFrom ? `${spec.importedFrom.planId}@${spec.importedFrom.version}:${spec.importedFrom.contentHash}` : "none"}\`
+`;
+}
+
+export function renderLegacyPlanMarkdown(spec: LegacyPlanSpec): string {
+	const steps = spec.steps
+		.map(
+			(step) => `### ${step.id}：${step.title}
+
+- 目的：${step.purpose}
+- 旧能力字段：${step.requiredCapabilities.join(", ") || "none"}
+- 旧依赖范围：${step.dependencyScopes?.join(", ") || "none"}
+- 旧变更范围：${step.pathScopes.join(", ") || "none"}
+
+#### 操作
+${markdownList(step.actions)}
+
+#### 验收
+${markdownList(step.acceptance)}`,
+		)
+		.join("\n\n");
+	return `# Legacy Plan (view only): ${spec.goal}
+
+> PlanRef: \`${spec.planId}@${spec.version}:${spec.contentHash}\`
+> Schema: \`${spec.schema}\`
+> This v1 artifact is immutable and cannot resume directly. Migrate to v2 and confirm again.
+
+## 已知事实
+${markdownList(spec.facts)}
+
+## 假设
+${markdownList(spec.assumptions)}
+
+## 步骤
+
+${steps}
+
+## 风险
+${markdownList(spec.risks)}
 `;
 }
 
@@ -94,7 +131,6 @@ async function atomicCreateImmutable(filePath: string, content: string): Promise
 	const temporary = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
 	await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600, flag: "wx" });
 	try {
-		// link() fails with EEXIST and cannot overwrite a competing immutable version.
 		await fs.link(temporary, filePath);
 	} finally {
 		await fs.rm(temporary, { force: true });
@@ -145,7 +181,7 @@ export class PlanArtifactStore {
 
 	async save(spec: PlanSpec): Promise<ArtifactPaths> {
 		const errors = validatePlanSpec(spec);
-		if (errors.length) throw new ArtifactStoreError(`Invalid PlanSpec: ${errors.join("; ")}`);
+		if (errors.length) throw new ArtifactStoreError(`Invalid PlanSpec v2: ${errors.join("; ")}`);
 		const paths = this.paths(spec);
 		try {
 			await fs.mkdir(paths.directory, { recursive: true, mode: 0o700 });
@@ -173,11 +209,7 @@ export class PlanArtifactStore {
 					}
 				}
 			}
-			const oldReview = await existingContent(paths.review);
-			if (oldReview !== reviewContent) {
-				if (oldReview !== undefined) await fs.rm(paths.review);
-				await atomicWrite(paths.review, reviewContent);
-			}
+			if ((await existingContent(paths.review)) !== reviewContent) await atomicWrite(paths.review, reviewContent);
 			return paths;
 		} catch (error) {
 			if (error instanceof ArtifactStoreError) throw error;
@@ -201,26 +233,47 @@ export class PlanArtifactStore {
 		}
 	}
 
-	async loadVersion(planId: string, version: number): Promise<PlanSpec> {
+	async loadAnyVersion(planId: string, version: number): Promise<StoredPlanSpec> {
 		const paths = this.paths({ planId, version });
 		try {
-			const parsed = JSON.parse(await fs.readFile(paths.spec, "utf8")) as PlanSpec;
-			const errors = validatePlanSpec(parsed);
-			if (errors.length) throw new ArtifactStoreError(`Stored PlanSpec is invalid: ${errors.join("; ")}`);
-			if (parsed.planId !== planId || parsed.version !== version) {
-				throw new ArtifactStoreError("Stored PlanSpec identity does not match its version path");
+			const parsed = JSON.parse(await fs.readFile(paths.spec, "utf8")) as unknown;
+			if (isLegacyPlanSpec(parsed)) {
+				const errors = validateLegacyPlanSpec(parsed);
+				if (errors.length) throw new ArtifactStoreError(`Stored legacy PlanSpec is invalid: ${errors.join("; ")}`);
+				if (parsed.planId !== planId || parsed.version !== version || calculateLegacyPlanHash(parsed) !== parsed.contentHash) {
+					throw new ArtifactStoreError("Stored legacy PlanSpec identity/hash does not match its path");
+				}
+				return parsed;
 			}
-			if (calculatePlanHash(parsed) !== parsed.contentHash) throw new ArtifactStoreError("Stored PlanSpec hash mismatch");
-			return parsed;
+			const v2 = parsed as PlanSpec;
+			const errors = validatePlanSpec(v2);
+			if (errors.length) throw new ArtifactStoreError(`Stored PlanSpec v2 is invalid: ${errors.join("; ")}`);
+			if (v2.planId !== planId || v2.version !== version || calculatePlanHash(v2) !== v2.contentHash) {
+				throw new ArtifactStoreError("Stored PlanSpec v2 identity/hash does not match its path");
+			}
+			return v2;
 		} catch (error) {
 			if (error instanceof ArtifactStoreError) throw error;
 			throw new ArtifactStoreError("Failed to load PlanSpec version", error);
 		}
 	}
 
+	async loadVersion(planId: string, version: number): Promise<PlanSpec> {
+		const spec = await this.loadAnyVersion(planId, version);
+		if (isLegacyPlanSpec(spec)) throw new ArtifactStoreError("Requested PlanSpec is legacy v1; migrate before implementation");
+		return spec;
+	}
+
+	async loadAny(ref: PlanRef): Promise<StoredPlanSpec> {
+		const parsed = await this.loadAnyVersion(ref.planId, ref.version);
+		const actual = isLegacyPlanSpec(parsed) ? legacyPlanRef(parsed) : parsed;
+		if (!samePlanRef(ref, actual)) throw new ArtifactStoreError("Stored PlanSpec does not match requested PlanRef");
+		return parsed;
+	}
+
 	async load(ref: PlanRef): Promise<PlanSpec> {
-		const parsed = await this.loadVersion(ref.planId, ref.version);
-		if (!samePlanRef(ref, parsed)) throw new ArtifactStoreError("Stored PlanSpec does not match requested PlanRef");
+		const parsed = await this.loadAny(ref);
+		if (isLegacyPlanSpec(parsed)) throw new ArtifactStoreError("Requested PlanSpec is legacy v1; migrate before implementation");
 		return parsed;
 	}
 }

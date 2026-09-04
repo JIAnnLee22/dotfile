@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { PlanArtifactStore, renderPlanMarkdown } from "./src/artifact-store.ts";
+import { PlanArtifactStore, renderLegacyPlanMarkdown, renderPlanMarkdown } from "./src/artifact-store.ts";
 import { canonicalJson, sha256 } from "./src/canonical.ts";
+import { CapabilityRegistry, defaultRegistryEntries } from "./src/capability-registry.ts";
+import { loadPolicyConfig } from "./src/config.ts";
 import { PlanController } from "./src/controller.ts";
 import { renderPlanDiffMarkdown, type PlanDiff } from "./src/diff.ts";
 import {
@@ -20,21 +21,23 @@ import {
 	type PlanDraft,
 	type PlanRef,
 	type PlanScope,
+	type PlanStatus,
+	type ToolBaselineRecord,
 } from "./src/domain.ts";
+import { ExecutionLoop, type LoopDecision } from "./src/execution-loop.ts";
 import { AUDIT_ENTRY_TYPE } from "./src/journal.ts";
-import { calculatePolicyDigest, evaluateToolCall } from "./src/policy.ts";
+import { evaluateToolCall } from "./src/policy.ts";
+import { chooseReviewDecision, confirmImplementation, renderUserPlan, requestEditFeedback } from "./src/review-ui.ts";
+import { usesPlanningPolicy } from "./src/state-machine.ts";
+import { MANDATORY_IMPLEMENTATION_TOOLS, PLAN_MANAGED_TOOLS, ToolSession } from "./src/tool-session.ts";
 import { buildPlanProgressLines } from "./src/ui.ts";
-import { captureWorkspaceSnapshot, dependencyScopes, WorkspaceSnapshotError } from "./src/workspace.ts";
 
-const CONTEXT_TYPE = "plan-mode/context";
-const RESULT_TYPE = "plan-mode/action-result";
+const CONTEXT_TYPE = "plan-mode/context-v2";
+const RESULT_TYPE = "plan-mode/action-result-v2";
 const SUBMIT_TOOL = "plan_submit";
 const QUESTION_TOOL = "plan_question";
 const COMPLETE_TOOL = "plan_step_complete";
 const BLOCK_TOOL = "plan_blocked";
-const READ_TOOLS = ["read", "grep", "find", "ls"];
-const WRITE_TOOLS = ["edit", "write", "patch"];
-const PROCESS_TOOLS = ["bash"];
 const CONTROL_TOOLS = new Set([SUBMIT_TOOL, QUESTION_TOOL, COMPLETE_TOOL, BLOCK_TOOL]);
 const EXTENSION_SOURCE = import.meta.filename;
 
@@ -55,44 +58,10 @@ function scopeFor(ctx: ExtensionContext): PlanScope {
 	};
 }
 
-function contextDigest(ctx: ExtensionContext): string {
-	return sha256(
-		canonicalJson({
-			cwd: path.resolve(ctx.cwd),
-			model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : null,
-			contract: "pi-plan-mode/context-v1",
-		}),
-	);
-}
-
-function policyDigest(pi: ExtensionAPI): string {
-	return calculatePolicyDigest(pi.getAllTools(), EXTENSION_SOURCE);
-}
-
-async function environmentFor(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	controller: PlanController,
-	action: PlanAction,
-	extra: Partial<ActionEnvironment> = {},
-): Promise<ActionEnvironment> {
-	let workspaceSnapshot = extra.workspaceSnapshot;
-	if (!workspaceSnapshot && (action === "submit" || action === "edit") && extra.draft) {
-		workspaceSnapshot = await captureWorkspaceSnapshot(ctx.cwd, dependencyScopes(extra.draft));
-	} else if (
-		!workspaceSnapshot &&
-		new Set<PlanAction>(["approve", "run", "execute", "resume"]).has(action) &&
-		controller.spec?.workspaceSnapshot
-	) {
-		workspaceSnapshot = await captureWorkspaceSnapshot(ctx.cwd, dependencyScopes(controller.spec));
-	}
-	return {
-		scope: scopeFor(ctx),
-		policyDigest: policyDigest(pi),
-		contextDigest: contextDigest(ctx),
-		...extra,
-		...(workspaceSnapshot ? { workspaceSnapshot } : {}),
-	};
+function tokenize(value: string): string[] {
+	const tokens: string[] = [];
+	for (const match of value.matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)) tokens.push(match[1] ?? match[2] ?? match[3]);
+	return tokens;
 }
 
 function formatResult(result: PlanActionResult): string {
@@ -100,7 +69,7 @@ function formatResult(result: PlanActionResult): string {
 	if (!result.ok) {
 		return `PLAN_ACTION_ERROR ${result.error?.code ?? "UNKNOWN"}: ${result.error?.message ?? "Unknown error"}\nstate=${result.state.status} plan=${ref} security=${SECURITY_LEVEL}`;
 	}
-	return `PLAN_ACTION_OK state=${result.state.status} plan=${ref} epoch=${result.state.epoch} security=${SECURITY_LEVEL}`;
+	return `PLAN_ACTION_OK state=${result.state.status} plan=${ref} revision=${result.state.revision} security=${SECURITY_LEVEL}`;
 }
 
 function formatTuiResult(result: PlanActionResult): string {
@@ -108,35 +77,32 @@ function formatTuiResult(result: PlanActionResult): string {
 	switch (result.state.status) {
 		case "inactive":
 			return "Plan Mode is inactive.";
-		case "researching":
-			return "Plan Mode started — researching read-only.";
+		case "planning":
+			return "Plan Mode started — planning read-only.";
 		case "awaiting_input":
 			return `Plan Mode needs input: ${result.pendingInput?.prompt ?? "clarification required"}`;
 		case "review":
-			return "Plan ready — confirm once to execute all Todos.";
-		case "approved":
-			return "Plan approved — ready to run.";
-		case "executing":
-			return "Plan execution is running.";
+			return "Plan ready for review.";
+		case "implementing":
+			return "Plan implementation is running with normal Pi permissions.";
 		case "paused":
 			return `Plan paused${result.state.reason ? `: ${result.state.reason}` : "."}`;
 		case "completed":
-			return "All plan Todos completed.";
+			return "All plan steps were reported complete.";
 		case "stale":
 		case "failed":
-		case "rejected":
 		case "cancelled":
 			return `Plan ${result.state.status}${result.state.reason ? `: ${result.state.reason}` : "."}`;
 	}
 }
 
-function resultError(controller: PlanController, action: PlanAction, code: PlanActionResult["error"]): PlanActionResult {
+function resultError(controller: PlanController, action: PlanAction, error: NonNullable<PlanActionResult["error"]>): PlanActionResult {
 	return {
 		requestId: `${action}-${randomUUID()}`,
 		ok: false,
 		state: controller.state,
 		planRef: controller.state.planRef,
-		error: code,
+		error,
 	};
 }
 
@@ -174,41 +140,27 @@ function expectedFromFlags(pi: ExtensionAPI): PlanRef | undefined {
 	return planId && contentHash && Number.isInteger(version) ? { planId, version, contentHash } : undefined;
 }
 
-function editableDraft(spec: NonNullable<PlanController["spec"]>): PlanDraft {
-	return {
-		goal: spec.goal,
-		facts: spec.facts,
-		assumptions: spec.assumptions,
-		steps: spec.steps,
-		risks: spec.risks,
-	};
-}
-
-function tokenize(value: string): string[] {
-	const tokens: string[] = [];
-	for (const match of value.matchAll(/"([^"]*)"|'([^']*)'|([^\s]+)/g)) tokens.push(match[1] ?? match[2] ?? match[3]);
-	return tokens;
-}
-
-export default function planModeExtension(pi: ExtensionAPI): void {
+export default async function planModeExtension(pi: ExtensionAPI): Promise<void> {
+	const agentDir = path.resolve(process.env.PI_CODING_AGENT_DIR || getAgentDir());
+	const loadedConfig = await loadPolicyConfig(agentDir);
+	const registry = new CapabilityRegistry([...defaultRegistryEntries(agentDir), ...loadedConfig.entries]);
+	const toolSession = new ToolSession(pi, registry);
+	const loop = new ExecutionLoop();
 	let controller: PlanController | undefined;
-	let baselineTools: string[] | undefined;
 	let startupFlagsHandled = false;
 	let pendingStartupNotice: PlanActionResult | undefined;
-	// Operations Deck 联动：deck 处于 full 模式时隐藏本扩展的独立 widget（S4）。
-	let deckControlsWidget = false;
-	let deckModeListener: (() => void) | undefined;
 	let pendingFlagAction:
 		| { action: PlanAction; expectedPlan?: PlanRef; extra: Partial<ActionEnvironment>; actor: Actor }
 		| undefined;
-	let lastExecutionSignature: string | undefined;
-	let stagnantExecutionTurns = 0;
-	let autonomousContinuationTurns = 0;
-	const MAX_STAGNANT_TURNS = 2;
-	const MAX_AUTONOMOUS_CONTINUATIONS = 256;
+	let legacyBaselineCandidate: readonly string[] | undefined;
+	let treeFallbackBaseline: ToolBaselineRecord | undefined;
+	let cleanupRunning = false;
+	let configNoticeShown = false;
+	let deckControlsWidget = false;
+	let deckModeListener: (() => void) | undefined;
 
-	pi.registerFlag("plan", { description: "Start in strict Plan Mode", type: "boolean", default: false });
-	pi.registerFlag("plan-action", { description: "Non-interactive Plan Mode action", type: "string" });
+	pi.registerFlag("plan", { description: "Start in Plan Mode v2", type: "boolean", default: false });
+	pi.registerFlag("plan-action", { description: "Non-interactive Plan Mode v2 action", type: "string" });
 	pi.registerFlag("plan-goal", { description: "Goal for --plan or --plan-action start", type: "string" });
 	pi.registerFlag("plan-id", { description: "Expected immutable plan id", type: "string" });
 	pi.registerFlag("plan-version", { description: "Expected immutable plan version", type: "string" });
@@ -218,135 +170,16 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	function ensureController(ctx: ExtensionContext): PlanController {
 		if (controller) return controller;
-		const cwd = path.resolve(ctx.cwd);
-		const root = process.env.PI_PLAN_MODE_HOME || PlanArtifactStore.defaultRoot();
-		const store = new PlanArtifactStore(root, cwd);
+		const store = new PlanArtifactStore(process.env.PI_PLAN_MODE_HOME || PlanArtifactStore.defaultRoot(), ctx.cwd);
 		controller = new PlanController({
 			store,
 			journal: { append: (event) => pi.appendEntry(AUDIT_ENTRY_TYPE, event) },
 		});
-		baselineTools = undefined;
 		return controller;
 	}
 
-	async function enforceLiveDrift(ctx: ExtensionContext): Promise<void> {
-		const current = ensureController(ctx);
-		if (!new Set(["approved", "executing", "paused"]).has(current.state.status) || !current.spec) return;
-		if (current.spec.policyDigest !== policyDigest(pi) || current.spec.contextDigest !== contextDigest(ctx)) {
-			await current.markStale({ channel: "system", id: "live-drift-guard" }, scopeFor(ctx), "Live cwd/model/tool policy drifted from approved PlanSpec");
-			return;
-		}
-		if (current.state.status !== "executing" && current.spec.workspaceSnapshot) {
-			try {
-				const actual = await captureWorkspaceSnapshot(ctx.cwd, dependencyScopes(current.spec));
-				await current.revalidateWorkspace({ channel: "system", id: "workspace-drift-guard" }, scopeFor(ctx), actual);
-			} catch (error) {
-				await current.markStale(
-					{ channel: "system", id: "workspace-drift-guard" },
-					scopeFor(ctx),
-					`Workspace dependency snapshot failed closed: ${error instanceof Error ? error.message : String(error)}`,
-				);
-			}
-		}
-	}
-
-	function applyVisibleTools(ctx: ExtensionContext): void {
-		const current = ensureController(ctx);
-		const state = current.state;
-		const allNames = new Set(pi.getAllTools().map((tool) => tool.name));
-		if (state.status === "inactive") {
-			if (baselineTools) pi.setActiveTools(baselineTools.filter((name) => allNames.has(name)));
-			baselineTools = undefined;
-			return;
-		}
-		if (!baselineTools) baselineTools = pi.getActiveTools();
-		const visible = READ_TOOLS.filter((name) => allNames.has(name));
-		if (new Set(["researching", "review", "stale"]).has(state.status) && allNames.has(SUBMIT_TOOL)) {
-			visible.push(SUBMIT_TOOL);
-		}
-		if (state.status === "researching" && allNames.has(QUESTION_TOOL)) visible.push(QUESTION_TOOL);
-		if (state.status === "executing") {
-			const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
-			if (allNames.has(COMPLETE_TOOL)) visible.push(COMPLETE_TOOL);
-			if (allNames.has(BLOCK_TOOL)) visible.push(BLOCK_TOOL);
-			if (step?.requiredCapabilities.includes("fs.write")) {
-				for (const name of WRITE_TOOLS) {
-					if (allNames.has(name) && baselineTools.includes(name)) visible.push(name);
-				}
-			}
-			if (step?.requiredCapabilities.includes("process.exec")) {
-				for (const name of PROCESS_TOOLS) {
-					if (allNames.has(name) && baselineTools.includes(name)) visible.push(name);
-				}
-			}
-		}
-		pi.setActiveTools([...new Set(visible)]);
-	}
-
-	function updateUI(ctx: ExtensionContext): void {
-		if (!ctx.hasUI) return;
-		const current = ensureController(ctx);
-		const state = current.state;
-		if (deckControlsWidget) {
-			// Operations Deck 的 full 模式接管 Plan 展示：隐藏本扩展的 widget 与 footer 状态。
-			ctx.ui.setStatus("plan-mode", undefined);
-			ctx.ui.setWidget("plan-mode", undefined);
-			return;
-		}
-		if (state.status === "inactive") {
-			ctx.ui.setStatus("plan-mode", undefined);
-			ctx.ui.setWidget("plan-mode", undefined);
-			return;
-		}
-		const color = state.status === "executing" ? "accent" : state.status === "failed" || state.status === "stale" ? "error" : "warning";
-		const spec = current.spec;
-		const label =
-			state.status === "researching" || state.status === "awaiting_input" || state.status === "review"
-				? "PLAN · READ ONLY"
-				: state.status === "executing"
-					? "PLAN · EXECUTING"
-					: `PLAN · ${state.status.toUpperCase()}`;
-		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg(color, label));
-		const lines = buildPlanProgressLines(spec, state);
-		if (!lines) {
-			ctx.ui.setWidget("plan-mode", undefined);
-			return;
-		}
-		ctx.ui.setWidget("plan-mode", (_tui, theme) => ({
-			render(width: number): string[] {
-				return lines.map((line, index) => {
-					const styled = theme.fg(index === 0 ? "accent" : "dim", line);
-					return truncateToWidth(styled, width, theme.fg("dim", "…"));
-				});
-			},
-			invalidate() {},
-		}));
-		// 广播只读 Plan 快照给 Operations Deck（显示用，非权威状态）。
-		pi.events.emit("operations-deck:plan", { state, spec });
-	}
-
-	function emitMessage(ctx: ExtensionContext, customType: string, content: string, details?: unknown): void {
-		if (ctx.mode === "print") {
-			// Pi's guarded Print mode reserves raw stdout for the final assistant message;
-			// the public Extension API has no raw-output method, so control results use stderr.
-			process.stderr.write(`${content}\n`);
-			return;
-		}
-		pi.sendMessage({ customType, content, display: true, details }, { triggerTurn: false });
-	}
-
-	function emitResult(ctx: ExtensionContext, result: PlanActionResult): void {
-		emitMessage(ctx, RESULT_TYPE, ctx.mode === "tui" ? formatTuiResult(result) : formatResult(result), result);
-		if (result.ok && (result.data as PlanDiff | undefined)?.schema === "dev.pi.plan-diff/v1") {
-			emitMessage(ctx, "plan-mode/diff", renderPlanDiffMarkdown(result.data as PlanDiff), result.data);
-		}
-		if (ctx.mode === "rpc") {
-			emitMessage(
-				ctx,
-				"plan-mode/safety-warning",
-				"PLAN_SAFETY_WARNING SAFETY_BOUNDARY_DEGRADED: RPC direct bash is outside Plan Mode; security=agent-tools-only",
-			);
-		}
+	function request(action: PlanAction, actor: Actor, expectedPlan?: PlanRef): PlanActionRequest {
+		return { protocolVersion: ACTION_PROTOCOL, requestId: `${action}-${randomUUID()}`, action, actor, expectedPlan };
 	}
 
 	async function dispatch(
@@ -357,111 +190,156 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		actor = actorFor(ctx),
 	): Promise<PlanActionResult> {
 		const current = ensureController(ctx);
-		const request: PlanActionRequest = {
-			protocolVersion: ACTION_PROTOCOL,
-			requestId: `${action}-${randomUUID()}`,
-			action,
-			expectedPlan,
-			actor,
-			payload: extra,
-		};
-		let environment: ActionEnvironment;
-		try {
-			environment = await environmentFor(pi, ctx, current, action, extra);
-		} catch (error) {
-			const code = action === "submit" || action === "edit" ? "INVALID_PLAN" : "STALE";
-			const message = `${error instanceof WorkspaceSnapshotError ? "Workspace snapshot rejected" : "Workspace snapshot failed"}: ${error instanceof Error ? error.message : String(error)}`;
-			if (code === "STALE" && new Set(["approved", "executing", "paused"]).has(current.state.status)) {
-				try {
-					await current.markStale({ channel: "system", id: "workspace-snapshot-guard" }, scopeFor(ctx), message);
-				} catch (staleError) {
-					const result = resultError(current, action, {
-						code: "STORAGE_ERROR",
-						message: `Failed to persist workspace-stale transition: ${staleError instanceof Error ? staleError.message : String(staleError)}`,
-						retryable: false,
-					});
-					applyVisibleTools(ctx);
-					updateUI(ctx);
-					return result;
-				}
-			}
-			const result = resultError(current, action, { code, message, retryable: true });
-			applyVisibleTools(ctx);
-			updateUI(ctx);
-			return result;
+		return current.dispatch(request(action, actor, expectedPlan), { scope: scopeFor(ctx), ...extra });
+	}
+
+	function managedToolsForStatus(status: PlanStatus): string[] {
+		switch (status) {
+			case "planning":
+				return [QUESTION_TOOL, SUBMIT_TOOL];
+			case "implementing":
+				return [COMPLETE_TOOL, BLOCK_TOOL];
+			case "stale":
+				return [COMPLETE_TOOL, BLOCK_TOOL];
+			default:
+				return [];
 		}
-		const result = await current.dispatch(request, environment);
-		applyVisibleTools(ctx);
-		updateUI(ctx);
-		return result;
 	}
 
-	function renderUserPlan(current: PlanController): string {
-		const spec = current.spec;
-		if (!spec) return "Plan details are unavailable.";
-		const steps = spec.steps
-			.map(
-				(step, index) =>
-					`### ${index + 1}. ${step.title}\n${step.actions.map((action) => `- ${action}`).join("\n")}\n- Acceptance: ${step.acceptance.join("; ")}\n- Changes: ${step.pathScopes.join(", ") || "none"}`,
-			)
-			.join("\n\n");
-		const risks = spec.risks.length > 0 ? spec.risks.map((risk) => `- ${risk}`).join("\n") : "- None identified";
-		return `# Plan: ${spec.goal}\n\n## Todos\n\n${steps}\n\n## Risks\n${risks}`;
-	}
-
-	function planConfirmationText(current: PlanController): string {
-		const spec = current.spec;
-		if (!spec) return "Plan details are unavailable.";
-		const visibleSteps = spec.steps.slice(0, 12).map((step, index) => `${index + 1}. ${step.title}`).join("\n");
-		const hiddenSteps = spec.steps.length > 12 ? `\n… ${spec.steps.length - 12} more steps` : "";
-		const processWarning = spec.steps.some((step) => step.requiredCapabilities.includes("process.exec"))
-			? "\n\n⚠ Includes approved bash/process execution. Commands run with your user permissions, are not path-sandboxed, and may have filesystem or network side effects."
-			: "";
-		const risks = spec.risks.length > 0 ? `\n\nRisks:\n${spec.risks.slice(0, 5).map((risk) => `• ${risk}`).join("\n")}` : "";
-		return `${spec.goal}\n\nTodos (${spec.steps.length}):\n${visibleSteps}${hiddenSteps}${risks}${processWarning}`;
-	}
-
-	async function requireInteractivePlanRef(
-		ctx: ExtensionContext,
-		action: "approve" | "run" | "execute" | "resume",
-	): Promise<PlanRef | undefined> {
+	function applyStateTools(ctx: ExtensionContext): { ok: boolean; reason?: string } {
 		const current = ensureController(ctx);
-		const ref = current.state.planRef;
-		if (!ctx.hasUI || !ref) return undefined;
-		const confirmed = await ctx.ui.confirm(
-			action === "approve" ? "Approve this plan without starting it?" : "Execute this plan?",
-			planConfirmationText(current),
-		);
-		return confirmed ? ref : undefined;
+		const state = current.state;
+		if (usesPlanningPolicy(state.status)) {
+			const result = toolSession.applyPlanning(managedToolsForStatus(state.status));
+			return { ok: result.ok, reason: result.reason };
+		}
+		if (state.status === "implementing") {
+			const result = toolSession.verifyImplementation();
+			return { ok: result.ok, reason: result.reason };
+		}
+		return { ok: true };
 	}
 
-	function queueExecutionTurn(ctx: ExtensionContext, reason: string): void {
-		pi.sendMessage(
-			{
-				customType: "plan-mode/continue",
-				content: `${reason}\nContinue the approved plan from the current Todo. Do not stop between steps; use ${COMPLETE_TOOL} after each step has the required successful tool evidence. If execution is genuinely blocked or needs a wider plan, call ${BLOCK_TOOL}.`,
-				display: false,
-			},
-			{ triggerTurn: true, deliverAs: "followUp" },
-		);
+	function updateUI(ctx: ExtensionContext): void {
+		if (!ctx.hasUI) return;
+		const current = ensureController(ctx);
+		const state = current.state;
+		if (deckControlsWidget || state.status === "inactive") {
+			ctx.ui.setStatus("plan-mode", undefined);
+			ctx.ui.setWidget("plan-mode", undefined);
+			return;
+		}
+		const color = state.status === "implementing" ? "accent" : state.status === "failed" || state.status === "stale" ? "error" : "warning";
+		const label = state.status === "planning" || state.status === "awaiting_input" || state.status === "review"
+			? "PLAN · READ ONLY"
+			: state.status === "implementing"
+				? "PLAN · IMPLEMENTING"
+				: `PLAN · ${state.status.toUpperCase()}`;
+		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg(color, label));
+		const lines = buildPlanProgressLines(current.spec, state);
+		if (!lines) {
+			ctx.ui.setWidget("plan-mode", undefined);
+		} else {
+			ctx.ui.setWidget("plan-mode", (_tui, theme) => ({
+				render(width: number): string[] {
+					return lines.map((line, index) => truncateToWidth(theme.fg(index === 0 ? "accent" : "dim", line), width, theme.fg("dim", "…")));
+				},
+				invalidate() {},
+			}));
+		}
+		pi.events.emit("operations-deck:plan", { state, spec: current.spec });
+	}
+
+	function emitMessage(ctx: ExtensionContext, customType: string, content: string, details?: unknown): void {
+		if (ctx.mode === "print") {
+			process.stderr.write(`${content}\n`);
+			return;
+		}
+		pi.sendMessage({ customType, content, display: true, details }, { triggerTurn: false });
+	}
+
+	function emitResult(ctx: ExtensionContext, result: PlanActionResult): void {
+		emitMessage(ctx, RESULT_TYPE, ctx.mode === "tui" ? formatTuiResult(result) : formatResult(result), result);
+		if (result.ok && (result.data as PlanDiff | undefined)?.schema === "dev.pi.plan-diff/v2") {
+			emitMessage(ctx, "plan-mode/diff-v2", renderPlanDiffMarkdown(result.data as PlanDiff), result.data);
+		}
+		if (ctx.mode === "rpc") {
+			emitMessage(
+				ctx,
+				"plan-mode/safety-warning",
+				"PLAN_SAFETY_WARNING SAFETY_BOUNDARY_DEGRADED: RPC direct bash is outside planning tool_call policy; implementation uses normal Pi permissions",
+			);
+		}
+	}
+
+	function queueDecision(ctx: ExtensionContext, decision: LoopDecision): void {
+		if (decision.kind !== "queue-step" && decision.kind !== "queue-final") return;
+		const current = ensureController(ctx);
+		const state = current.state;
+		const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const content = decision.kind === "queue-final"
+			? `${decision.reason}\nGive the user a concise final result: changed files, validation performed, deviations, and remaining risks. Do not call ${COMPLETE_TOOL} again.`
+			: `${decision.reason}\nContinue the approved plan from the current step${step ? ` ${step.id}: ${step.title}` : ""}. Ordinary tools now use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when the step is done; call ${BLOCK_TOOL} for a real blocker.`;
+		pi.sendMessage({ customType: "plan-mode/continue-v2", content, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+	}
+
+	async function restoreAndArchive(ctx: ExtensionContext, reason: string): Promise<void> {
+		if (cleanupRunning) return;
+		cleanupRunning = true;
+		try {
+			const current = ensureController(ctx);
+			const baseline = current.baseline;
+			if (baseline) {
+				const restored = toolSession.restoreBaseline(baseline);
+				if (!restored.ok && ctx.hasUI) ctx.ui.notify(restored.reason ?? "Some baseline tools are unavailable", "warning");
+			}
+			await current.archive({ channel: "system", id: "plan-cleanup" }, scopeFor(ctx), reason);
+			loop.reset();
+			updateUI(ctx);
+		} finally {
+			cleanupRunning = false;
+		}
+	}
+
+	function baselineFromTools(current: PlanController, ctx: ExtensionContext, planId: string, tools: readonly string[]): ToolBaselineRecord {
+		return {
+			schema: "dev.pi.plan-tool-baseline/v2",
+			baselineId: current.newOpaqueId(),
+			planId,
+			toolNames: [...new Set(tools)],
+			capturedAt: new Date().toISOString(),
+			sessionId: scopeFor(ctx).sessionId,
+			branchEntryId: scopeFor(ctx).branchLeafId,
+		};
 	}
 
 	async function startWithGoal(ctx: ExtensionContext, goal: string): Promise<PlanActionResult> {
-		const normalizedGoal = goal.trim();
-		const result = await dispatch(ctx, "start", { goal: normalizedGoal });
-		if (result.ok && ctx.hasUI) {
-			if (ctx.isIdle()) pi.sendUserMessage(normalizedGoal);
-			else pi.sendUserMessage(normalizedGoal, { deliverAs: "followUp" });
+		const current = ensureController(ctx);
+		const planId = current.newOpaqueId();
+		const baseline = toolSession.captureBaseline(planId, scopeFor(ctx), current.newOpaqueId(), new Date().toISOString());
+		const result = await dispatch(ctx, "start", { goal: goal.trim(), baseline });
+		if (!result.ok) return result;
+		const applied = toolSession.applyPlanning(managedToolsForStatus("planning"));
+		if (!applied.ok) {
+			const reason = applied.reason ?? "Planning tools failed to activate";
+			await current.markFailed({ channel: "system", id: "planning-tool-setup" }, scopeFor(ctx), reason);
+			toolSession.restoreBaseline(baseline);
+			return resultError(current, "start", { code: "TOOL_UNAVAILABLE", message: reason, retryable: true });
+		}
+		updateUI(ctx);
+		if (ctx.hasUI) {
+			if (ctx.isIdle()) pi.sendUserMessage(goal.trim());
+			else pi.sendUserMessage(goal.trim(), { deliverAs: "followUp" });
 		}
 		return result;
 	}
 
-	async function startFromInteractivePrompt(ctx: ExtensionContext): Promise<PlanActionResult> {
+	async function startFromPrompt(ctx: ExtensionContext): Promise<PlanActionResult> {
 		const current = ensureController(ctx);
 		if (!ctx.hasUI) {
 			return resultError(current, "start", {
 				code: "UI_REQUIRED",
-				message: "Bare /plan requires TUI/RPC input; use /plan <goal> or /plan start <goal>",
+				message: "Bare /plan requires TUI/RPC input; use /plan <goal>",
 				retryable: true,
 			});
 		}
@@ -471,302 +349,320 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 			: resultError(current, "start", { code: "INVALID_PLAN", message: "Plan goal is required", retryable: true });
 	}
 
+	async function migrateLegacyIfNeeded(ctx: ExtensionContext, actor: Actor, expected: PlanRef): Promise<PlanActionResult | undefined> {
+		const current = ensureController(ctx);
+		if (!current.legacySpec) return undefined;
+		const planId = current.newOpaqueId();
+		const baseline = baselineFromTools(current, ctx, planId, legacyBaselineCandidate ?? pi.getActiveTools());
+		const migrated = await dispatch(ctx, "migrate_v1", { baseline }, expected, actor);
+		if (!migrated.ok) return migrated;
+		legacyBaselineCandidate = undefined;
+		return migrated;
+	}
+
+	async function startImplementation(ctx: ExtensionContext, expected: PlanRef, actor = actorFor(ctx)): Promise<PlanActionResult> {
+		const current = ensureController(ctx);
+		const migrated = await migrateLegacyIfNeeded(ctx, actor, expected);
+		if (migrated && !migrated.ok) return migrated;
+		const effectiveExpected = current.state.planRef;
+		if (!effectiveExpected) {
+			return resultError(current, "implement", { code: "INVALID_STATE", message: "No PlanSpec is available", retryable: true });
+		}
+		const baseline = current.baseline;
+		if (!baseline) {
+			return resultError(current, "implement", { code: "TOOL_UNAVAILABLE", message: "Persisted tool baseline is unavailable", retryable: true });
+		}
+		const prepared = toolSession.prepareImplementation(baseline);
+		if (!prepared.ok) {
+			updateUI(ctx);
+			return resultError(current, "implement", {
+				code: "TOOL_UNAVAILABLE",
+				message: prepared.reason ?? `Missing tools: ${prepared.missing.join(", ")}`,
+				retryable: true,
+				details: prepared,
+			});
+		}
+		const action: PlanAction = current.state.status === "paused" ? "resume" : "implement";
+		const result = await dispatch(
+			ctx,
+			action,
+			{ activeTools: prepared.active, activeToolsDigest: prepared.activeDigest },
+			effectiveExpected,
+			actor,
+		);
+		if (!result.ok) toolSession.applyPlanning(managedToolsForStatus(current.state.status));
+		else queueDecision(ctx, loop.onImplementationStarted(result.state));
+		updateUI(ctx);
+		return result;
+	}
+
+	async function editPlan(ctx: ExtensionContext): Promise<PlanActionResult> {
+		const current = ensureController(ctx);
+		if (!ctx.hasUI || !current.spec) {
+			return resultError(current, "edit_feedback", {
+				code: "UI_REQUIRED",
+				message: "Plan edit feedback requires TUI/RPC and a v2 PlanSpec",
+				retryable: true,
+			});
+		}
+		const feedback = await requestEditFeedback(ctx, current.spec);
+		if (!feedback) return resultError(current, "edit_feedback", { code: "INVALID_ACTION", message: "Plan edit cancelled", retryable: true });
+		const result = await dispatch(ctx, "edit_feedback", { feedback });
+		if (result.ok) {
+			toolSession.applyPlanning(managedToolsForStatus("planning"));
+			if (ctx.isIdle()) pi.sendUserMessage(`Revise the structured plan using this feedback:\n${feedback}`);
+			else pi.sendUserMessage(`Revise the structured plan using this feedback:\n${feedback}`, { deliverAs: "followUp" });
+		}
+		updateUI(ctx);
+		return result;
+	}
+
+	async function handleReview(ctx: ExtensionContext, submitted: PlanActionResult): Promise<PlanActionResult> {
+		const current = ensureController(ctx);
+		if (!submitted.ok || !current.spec) return submitted;
+		emitMessage(ctx, "plan-mode/review-v2", renderUserPlan(current.spec), { planRef: current.state.planRef });
+		if (!ctx.hasUI) return submitted;
+		const decision = await chooseReviewDecision(ctx, current.spec);
+		if (!decision) return submitted;
+		switch (decision) {
+			case "implement":
+				return startImplementation(ctx, current.state.planRef!, actorFor(ctx));
+			case "edit_feedback":
+				return editPlan(ctx);
+			case "continue_planning": {
+				const result = await dispatch(ctx, "continue_planning");
+				if (result.ok) {
+					toolSession.applyPlanning(managedToolsForStatus("planning"));
+					pi.sendMessage(
+						{ customType: "plan-mode/continue-planning-v2", content: "Continue read-only research and submit a new plan version when ready.", display: false },
+						{ triggerTurn: true, deliverAs: "followUp" },
+					);
+				}
+				updateUI(ctx);
+				return result;
+			}
+			case "cancel": {
+				const result = await dispatch(ctx, "cancel", { reason: "Cancelled from review panel" });
+				if (result.ok) await restoreAndArchive(ctx, "Review cancellation archived");
+				return result;
+			}
+		}
+	}
+
+	async function exactRefForInteractive(ctx: ExtensionContext, resume: boolean): Promise<PlanRef | undefined> {
+		const current = ensureController(ctx);
+		const ref = current.state.planRef;
+		if (!ref || !ctx.hasUI) return undefined;
+		if (current.spec) return (await confirmImplementation(ctx, current.spec, resume)) ? ref : undefined;
+		if (current.legacySpec) {
+			const confirmed = await ctx.ui.confirm(
+				"Migrate and resume legacy plan?",
+				`${current.legacySpec.goal}\n\nA new v2 lineage will be created. Old approval/grant will not be reused. Implementation enables ${MANDATORY_IMPLEMENTATION_TOOLS.join(", ")}.`,
+			);
+			return confirmed ? ref : undefined;
+		}
+		return undefined;
+	}
+
 	async function handleCommand(rawArgs: string, ctx: ExtensionContext): Promise<void> {
 		const current = ensureController(ctx);
 		const tokens = tokenize(rawArgs.trim());
 		if (tokens.length === 0) {
-			const result =
-				current.state.status === "inactive"
-					? await startFromInteractivePrompt(ctx)
-					: await dispatch(ctx, "status");
-			emitResult(ctx, result);
+			emitResult(ctx, current.state.status === "inactive" ? await startFromPrompt(ctx) : await dispatch(ctx, "status"));
 			return;
 		}
-		let action = tokens.shift() as PlanAction;
-		const known = new Set<PlanAction>([
-			"start",
-			"status",
-			"show",
-			"diff",
-			"edit",
-			"approve",
-			"run",
-			"execute",
-			"reject",
-			"pause",
-			"resume",
-			"verify",
-			"cancel",
-			"reset",
-			"audit",
-			"export",
-		]);
-		if (!known.has(action)) {
-			tokens.unshift(action);
-			action = "start";
+		const rawAction = tokens.shift()!;
+		const known = new Set(["start", "status", "show", "diff", "edit", "continue", "implement", "run", "pause", "resume", "cancel", "audit", "reset"]);
+		if (!known.has(rawAction)) {
+			emitResult(ctx, await startWithGoal(ctx, [rawAction, ...tokens].join(" ")));
+			return;
 		}
-
 		let result: PlanActionResult;
-		if (action === "start") {
-			result = await startWithGoal(ctx, tokens.join(" "));
-		} else if (action === "approve" || action === "run" || action === "execute" || action === "resume") {
-			const effectiveAction: "approve" | "run" | "execute" | "resume" =
-				action === "execute" && current.state.status === "review" ? "run" : action;
-			let expected = expectedFromTokens(current, tokens);
-			if (!expected) expected = await requireInteractivePlanRef(ctx, effectiveAction);
-			if (!expected) {
-				result = resultError(current, effectiveAction, {
-					code: ctx.hasUI ? "APPROVAL_REQUIRED" : "PLAN_REF_MISMATCH",
-					message: "The current plan must be explicitly confirmed; cancelled or missing exact PlanRef",
-					retryable: true,
-				});
-			} else {
-				result = await dispatch(ctx, effectiveAction, {}, expected);
+		switch (rawAction) {
+			case "start":
+				result = await startWithGoal(ctx, tokens.join(" "));
+				break;
+			case "status":
+				result = await dispatch(ctx, "status");
+				break;
+			case "show":
+				result = await dispatch(ctx, "show");
+				emitResult(ctx, result);
+				if (result.ok && current.spec) emitMessage(ctx, "plan-mode/review-v2", renderPlanMarkdown(current.spec));
+				else if (result.ok && current.legacySpec) emitMessage(ctx, "plan-mode/legacy-review", renderLegacyPlanMarkdown(current.legacySpec));
+				return;
+			case "diff": {
+				const versions = tokens.map(Number);
+				result = versions.length > 2 || versions.some((version) => !Number.isSafeInteger(version) || version < 1)
+					? resultError(current, "diff", { code: "INVALID_ACTION", message: "Usage: /plan diff [fromVersion] [toVersion]", retryable: true })
+					: await dispatch(ctx, "diff", { fromVersion: versions[0], toVersion: versions[1] });
+				break;
 			}
-		} else if (action === "edit") {
-			if (!ctx.hasUI || !current.spec) {
-				result = resultError(current, action, {
-					code: "UI_REQUIRED",
-					message: "Interactive JSON editor requires TUI/RPC and an existing PlanSpec",
-					retryable: true,
-				});
-			} else {
-				const edited = await ctx.ui.editor("Edit canonical plan draft (creates a new immutable version)", JSON.stringify(editableDraft(current.spec), null, 2));
-				try {
-					const draft = edited ? (JSON.parse(edited) as PlanDraft) : undefined;
-					result = draft
-						? await dispatch(ctx, action, { draft })
-						: resultError(current, action, { code: "INVALID_ACTION", message: "Edit cancelled", retryable: true });
-				} catch (error) {
-					result = resultError(current, action, {
-						code: "INVALID_PLAN",
-						message: `Edited JSON is invalid: ${error instanceof Error ? error.message : String(error)}`,
-						retryable: true,
-					});
+			case "edit":
+				result = await editPlan(ctx);
+				break;
+			case "continue":
+				result = await dispatch(ctx, "continue_planning");
+				if (result.ok) toolSession.applyPlanning(managedToolsForStatus("planning"));
+				break;
+			case "implement":
+			case "run":
+			case "resume": {
+				let expected = expectedFromTokens(current, tokens);
+				if (!expected) expected = await exactRefForInteractive(ctx, rawAction === "resume");
+				result = expected
+					? await startImplementation(ctx, expected)
+					: resultError(current, rawAction === "resume" ? "resume" : "implement", {
+							code: ctx.hasUI ? "APPROVAL_REQUIRED" : "PLAN_REF_MISMATCH",
+							message: "Implementation requires one explicit confirmation bound to the exact PlanRef",
+							retryable: true,
+						});
+				break;
+			}
+			case "pause":
+				if (!ctx.isIdle()) ctx.abort();
+				result = await dispatch(ctx, "pause", { reason: tokens.join(" ") || "Paused by user" });
+				if (result.ok) {
+					toolSession.applyPlanning(managedToolsForStatus("paused"));
+					loop.reset();
 				}
-			}
-		} else if (action === "reject" || action === "cancel") {
-			if (!ctx.isIdle()) ctx.abort();
-			result = await dispatch(ctx, action, { reason: tokens.join(" ") || undefined });
-		} else if (action === "pause") {
-			if (!ctx.isIdle()) ctx.abort();
-			result = await dispatch(ctx, action, { reason: tokens.join(" ") || "Pause requested; abort issued if agent was active" });
-		} else if (action === "verify") {
-			result = await dispatch(ctx, action, { stepId: tokens.shift(), note: tokens.join(" ") });
-		} else if (action === "show") {
-			result = await dispatch(ctx, action);
-			emitResult(ctx, result);
-			if (result.ok && current.spec) emitMessage(ctx, "plan-mode/review", renderPlanMarkdown(current.spec));
-			return;
-		} else if (action === "diff") {
-			const versions = tokens.map(Number);
-			if (versions.length > 2 || versions.some((version) => !Number.isSafeInteger(version) || version < 1)) {
-				result = resultError(current, action, {
-					code: "INVALID_ACTION",
-					message: "Usage: /plan diff [fromVersion] [toVersion]",
-					retryable: true,
-				});
-			} else {
-				result = await dispatch(ctx, action, {
-					fromVersion: versions[0],
-					toVersion: versions[1],
-				});
-			}
-			emitResult(ctx, result);
-			return;
-		} else if (action === "audit") {
-			result = await dispatch(ctx, action);
-			emitResult(ctx, result);
-			const audit = current.events.slice(-20).map((event) => `${event.sequence} ${event.occurredAt} ${event.action} ${event.decision} ${event.reason ?? ""}`);
-			emitMessage(ctx, "plan-mode/audit-view", audit.join("\n") || "No Plan Mode audit events");
-			return;
-		} else {
-			result = await dispatch(ctx, action);
+				break;
+			case "cancel":
+				if (!ctx.isIdle()) ctx.abort();
+				result = await dispatch(ctx, "cancel", { reason: tokens.join(" ") || "Cancelled by user" });
+				if (result.ok) await restoreAndArchive(ctx, "Cancelled plan archived");
+				break;
+			case "audit":
+				result = await dispatch(ctx, "audit");
+				emitResult(ctx, result);
+				emitMessage(
+					ctx,
+					"plan-mode/audit-view-v2",
+					current.events.slice(-30).map((event) => `${event.sequence} ${event.occurredAt} ${event.action} ${event.decision} ${event.reason ?? ""}`).join("\n") || "No v2 audit events",
+				);
+				return;
+			case "reset":
+				if (current.state.status === "stale" || current.state.status === "completed" || current.state.status === "cancelled" || current.state.status === "failed") {
+					await restoreAndArchive(ctx, "Manual reset archived plan tracking");
+					result = await dispatch(ctx, "status");
+				} else {
+					result = resultError(current, "status", { code: "INVALID_STATE", message: "Reset is available only for terminal or stale state", retryable: true });
+				}
+				break;
+			default:
+				result = resultError(current, "status", { code: "INVALID_ACTION", message: `Unsupported action: ${rawAction}`, retryable: true });
 		}
+		updateUI(ctx);
 		emitResult(ctx, result);
-		if (result.ok && result.state.status === "executing" && new Set(["run", "execute", "resume"]).has(action)) {
-			lastExecutionSignature = undefined;
-			stagnantExecutionTurns = 0;
-			autonomousContinuationTurns = 0;
-			queueExecutionTurn(ctx, "Execution was confirmed.");
-		}
 	}
 
 	pi.registerCommand("plan", {
-		description: "Plan a task, confirm once, and execute it to completion",
+		description: "Plan read-only, review once, then implement continuously with normal Pi tools",
 		handler: handleCommand,
 	});
 
 	pi.registerShortcut(Key.ctrlAlt("p"), {
-		description: "Start or inspect strict Plan Mode",
+		description: "Start or inspect Plan Mode v2",
 		handler: async (ctx) => {
 			const current = ensureController(ctx);
-			emitResult(
-				ctx,
-				current.state.status === "inactive"
-					? await startFromInteractivePrompt(ctx)
-					: await dispatch(ctx, "status"),
-			);
+			emitResult(ctx, current.state.status === "inactive" ? await startFromPrompt(ctx) : await dispatch(ctx, "status"));
 		},
 	});
 
 	pi.registerTool({
 		name: QUESTION_TOOL,
 		label: "Request plan clarification",
-		description: "Request explicit user input for a decision that materially affects the plan. Non-interactive modes enter awaiting_input instead of guessing.",
+		description: "Request explicit user input only for a material planning decision.",
 		promptGuidelines: [
-			"Use plan_question instead of silently choosing a high-impact assumption.",
-			"Ask one focused question and provide choices when the decision is enumerable.",
+			"Use plan_question only for ambiguity that materially changes the plan.",
+			"Ask one focused question and provide choices when practical.",
 		],
 		parameters: Type.Object({
-			question: Type.String({ minLength: 1 }),
-			choices: Type.Optional(Type.Array(Type.String(), { maxItems: 20 })),
+			question: Type.String({ minLength: 1, maxLength: 2000 }),
+			choices: Type.Optional(Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 20 })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const pending = await dispatch(
-				ctx,
-				"request_input",
-				{ question: params.question, choices: params.choices },
-				undefined,
-				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
-			);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			const pending = await dispatch(ctx, "request_input", { question: params.question, choices: params.choices }, undefined, modelActor);
 			if (!pending.ok) throw new Error(formatResult(pending));
 			if (!ctx.hasUI) {
 				return {
-					content: [{ type: "text", text: `${formatResult(pending)}\nAWAITING_INPUT: ${params.question}\nStop; a later explicit user input is required.` }],
+					content: [{ type: "text", text: `${formatResult(pending)}\nAWAITING_INPUT: ${params.question}` }],
 					details: pending,
+					terminate: true,
 				};
 			}
 			const answer = params.choices?.length
 				? await ctx.ui.select(params.question, params.choices)
 				: await ctx.ui.input(params.question, "User answer");
 			if (!answer?.trim()) {
-				return {
-					content: [{ type: "text", text: `${formatResult(pending)}\nClarification cancelled; remain awaiting_input.` }],
-					details: pending,
-				};
+				return { content: [{ type: "text", text: "Clarification cancelled; waiting for explicit input." }], details: pending, terminate: true };
 			}
 			const answered = await dispatch(ctx, "answer", { note: answer.trim() });
 			if (!answered.ok) throw new Error(formatResult(answered));
-			return {
-				content: [{ type: "text", text: `Explicit user answer: ${answer.trim()}` }],
-				details: answered,
-			};
+			return { content: [{ type: "text", text: `Explicit user answer: ${answer.trim()}` }], details: answered };
 		},
 	});
 
 	pi.registerTool({
 		name: SUBMIT_TOOL,
-		label: "Create plan",
-		description:
-			"Create the structured plan shown to the user for one confirmation. This is the only managed write allowed while researching; it writes only to the extension-owned user plan store.",
+		label: "Submit plan for review",
+		description: "Submit a concise PlanSpec v2 for one review decision. IDs, versions, hashes and permissions are generated internally.",
 		promptGuidelines: [
-			"Use plan_submit only after research and clarification are complete.",
-			"Declare dependencyScopes separately from mutation pathScopes; dependency drift invalidates approval.",
-			"Every fs.write step must list exact project-relative files or directory roots ending in '/'.",
-			"Declare process.exec only on steps that genuinely need built-in bash for tests, builds, or commands.",
+			"Use plan_submit after research and material clarification are complete.",
+			"Plan steps should state concrete actions, informational files, and validation; do not declare capabilities or path grants.",
 		],
 		parameters: Type.Object({
 			goal: Type.String({ minLength: 1, maxLength: 16_384 }),
-			facts: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
-			assumptions: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
+			decisions: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
 			steps: Type.Array(
 				Type.Object({
-					id: Type.String({ minLength: 1, maxLength: 128 }),
 					title: Type.String({ minLength: 1, maxLength: 1024 }),
-					purpose: Type.String({ minLength: 1, maxLength: 4096 }),
 					actions: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 256 }),
-					dependencyScopes: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 128 }),
-					pathScopes: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 128 }),
-					requiredCapabilities: Type.Array(StringEnum(["fs.read", "fs.write", "process.exec"] as const), { maxItems: 3 }),
-					acceptance: Type.Array(Type.String({ maxLength: 4096 }), { minItems: 1, maxItems: 256 }),
-					rollback: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
+					files: Type.Array(Type.String({ maxLength: 1024 }), { maxItems: 128 }),
+					validation: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
 				}),
 				{ minItems: 1, maxItems: 128 },
 			),
 			risks: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 256 }),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const submitted = await dispatch(
-				ctx,
-				"submit",
-				{ draft: params as PlanDraft },
-				undefined,
-				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
-			);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			const submitted = await dispatch(ctx, "submit", { draft: params as PlanDraft }, undefined, modelActor);
 			if (!submitted.ok) throw new Error(formatResult(submitted));
-			const current = ensureController(ctx);
-			if (ctx.hasUI && current.spec) emitMessage(ctx, "plan-mode/review", renderUserPlan(current));
-			if (!ctx.hasUI) {
-				return {
-					content: [{ type: "text", text: `${formatResult(submitted)}\nPlan created. Non-interactive execution requires one explicit 'run' action bound to the exact PlanRef.` }],
-					details: submitted,
-					terminate: true,
-				};
-			}
-			const expected = await requireInteractivePlanRef(ctx, "run");
-			if (!expected) {
-				return {
-					content: [{ type: "text", text: `${formatResult(submitted)}\nPlan created but not confirmed. Stop and wait for the user to revise or run it.` }],
-					details: submitted,
-					terminate: true,
-				};
-			}
-			const running = await dispatch(ctx, "run", {}, expected);
-			if (!running.ok) throw new Error(formatResult(running));
-			lastExecutionSignature = undefined;
-			stagnantExecutionTurns = 0;
-			autonomousContinuationTurns = 0;
-			return {
-				content: [
-					{
-						type: "text",
-						text: `${formatResult(running)}\nThe user confirmed once and execution is active. Plan Mode will start the execution turn automatically with the approved tools. Continue through every Todo without asking for per-step approval; after each step has successful evidence for its declared capabilities, call ${COMPLETE_TOOL}.`,
-					},
-				],
-				details: running,
-				terminate: true,
-			};
+			const result = await handleReview(ctx, submitted);
+			if (!result.ok) throw new Error(formatResult(result));
+			const text = result.state.status === "implementing"
+				? `${formatResult(result)}\nImplementation tools were read back successfully. A follow-up turn has been queued.`
+				: result.state.status === "planning"
+					? `${formatResult(result)}\nContinue planning and submit a new version when ready.`
+					: `${formatResult(result)}\nPlan remains available for review.`;
+			return { content: [{ type: "text", text }], details: result, terminate: true };
 		},
 	});
 
 	pi.registerTool({
 		name: COMPLETE_TOOL,
-		label: "Complete current plan step",
-		description:
-			"Mark the current Todo complete only after its declared capabilities have successful tool evidence, then advance automatically to the next Todo.",
+		label: "Report current plan step complete",
+		description: "Report the current step complete with a concise summary. Tool evidence is recorded for audit but is not a completion gate.",
 		promptGuidelines: [
-			"Call plan_step_complete after finishing the current step and checking its acceptance criteria.",
-			"Provide a concise evidence-based summary; do not ask the user to verify ordinary steps.",
-			`If blocked, do not call this tool—call ${BLOCK_TOOL} with the exact blocker instead.`,
+			"Call plan_step_complete after finishing the current step and its validation.",
+			"Use plan_blocked instead when implementation genuinely cannot continue.",
 		],
-		parameters: Type.Object({
-			summary: Type.String({ minLength: 1, maxLength: 4096 }),
-		}),
+		parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await dispatch(
-				ctx,
-				"complete_step",
-				{ note: params.summary },
-				undefined,
-				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
-			);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			const result = await dispatch(ctx, "complete_step", { note: params.summary }, undefined, modelActor);
 			if (!result.ok) throw new Error(formatResult(result));
-			const current = ensureController(ctx);
-			const next = current.spec?.steps.find((step) => step.id === result.state.currentStepId);
+			if (result.state.status === "stale") {
+				return { content: [{ type: "text", text: `${formatResult(result)}\nReport recorded only; stale plan progress did not advance.` }], details: result, terminate: true };
+			}
+			queueDecision(ctx, loop.onStepReported(result.state));
+			updateUI(ctx);
 			return {
-				content: [
-					{
-						type: "text",
-						text:
-							result.state.status === "completed"
-								? `${formatResult(result)}\nAll Todos are complete. Give the user the final result, changed files, and validation summary.`
-								: `${formatResult(result)}\nContinue immediately with ${next?.id ?? "the next Todo"}${next ? `: ${next.title}` : ""}; do not stop for user confirmation.`,
-					},
-				],
+				content: [{ type: "text", text: result.state.status === "completed" ? "All steps reported complete; final summary queued." : `Step reported complete; continuing with ${result.state.currentStepId}.` }],
 				details: result,
-				// Each Todo gets a fresh LLM turn so capability/tool changes are guaranteed to apply.
-				terminate: result.state.status !== "completed",
+				terminate: true,
 			};
 		},
 	});
@@ -774,25 +670,17 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: BLOCK_TOOL,
 		label: "Pause blocked plan",
-		description: "Pause autonomous execution immediately when the current plan cannot safely continue without user input or a revised scope.",
-		promptGuidelines: [
-			"Call plan_blocked only for a real blocker, material scope change, or newly discovered high-risk decision.",
-			"State the exact blocker and what user decision or plan revision is needed.",
-		],
-		parameters: Type.Object({
-			reason: Type.String({ minLength: 1, maxLength: 4096 }),
-		}),
+		description: "Pause continuous implementation for a real blocker, material plan change or high-risk decision.",
+		parameters: Type.Object({ reason: Type.String({ minLength: 1, maxLength: 4096 }) }),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const result = await dispatch(
-				ctx,
-				"pause",
-				{ reason: params.reason },
-				undefined,
-				{ channel: "model", id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" },
-			);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			const result = await dispatch(ctx, "block", { reason: params.reason }, undefined, modelActor);
 			if (!result.ok) throw new Error(formatResult(result));
+			if (result.state.status === "paused") toolSession.applyPlanning(managedToolsForStatus("paused"));
+			loop.reset();
+			updateUI(ctx);
 			return {
-				content: [{ type: "text", text: `${formatResult(result)}\nExecution paused for this blocker: ${params.reason}\nStop and wait for explicit user input or a revised plan.` }],
+				content: [{ type: "text", text: `${formatResult(result)}\nImplementation paused: ${params.reason}\nWait for explicit user input and /plan resume.` }],
 				details: result,
 				terminate: true,
 			};
@@ -801,71 +689,64 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 
 	pi.on("tool_call", async (event, ctx) => {
 		const current = ensureController(ctx);
-		try {
-			await enforceLiveDrift(ctx);
-		} catch (error) {
-			return { block: true, reason: `Plan Mode failed closed while checking live policy drift: ${error instanceof Error ? error.message : String(error)}` };
+		const evaluatedRevision = current.state.revision;
+		const managedTools = PLAN_MANAGED_TOOLS.map((name) => ({ name, sourcePath: EXTENSION_SOURCE }));
+		const evaluateLatest = () => evaluateToolCall({
+			state: current.state,
+			registry,
+			permissions: current.researchPermissions,
+			toolName: event.toolName,
+			input: event.input,
+			toolInfo: pi.getAllTools().find((tool) => tool.name === event.toolName),
+			cwd: ctx.cwd,
+			readRoots: [ctx.cwd],
+			managedTools,
+		});
+		let decision = evaluateLatest();
+		if (decision.permissionRequired && decision.sourceDigest && decision.capabilities) {
+			if (ctx.hasUI) {
+				const confirmed = await ctx.ui.confirm(
+					"Allow research capability for this plan?",
+					`Tool: ${event.toolName}\nCapabilities: ${decision.capabilities.join(", ")}\nThis permission is remembered only for the current plan and exact tool source.`,
+				);
+				try {
+					await current.recordResearchPermission(actorFor(ctx), scopeFor(ctx), {
+						toolName: event.toolName,
+						capabilities: decision.capabilities,
+						sourceDigest: decision.sourceDigest,
+						decision: confirmed ? "allow" : "deny",
+					});
+				} catch (error) {
+					return { block: true, reason: `Plan Mode failed closed while recording research permission: ${error instanceof Error ? error.message : String(error)}` };
+				}
+				decision = evaluateLatest();
+			}
 		}
-		const evaluatedState = current.state;
-		if (evaluatedState.status === "inactive") return;
-		const managedTools = [
-			{ name: SUBMIT_TOOL, sourcePath: EXTENSION_SOURCE },
-			{ name: QUESTION_TOOL, sourcePath: EXTENSION_SOURCE },
-			{ name: COMPLETE_TOOL, sourcePath: EXTENSION_SOURCE },
-			{ name: BLOCK_TOOL, sourcePath: EXTENSION_SOURCE },
-		];
-		const evaluateLatest = () =>
-			evaluateToolCall({
-				state: current.state,
-				spec: current.spec,
-				grant: current.grant,
-				toolName: event.toolName,
-				input: event.input,
-				toolInfo: pi.getAllTools().find((tool) => tool.name === event.toolName),
-				cwd: ctx.cwd,
-				readRoots: [ctx.cwd],
-				managedTools,
-			});
-		const decision = evaluateLatest();
-		let digest: string | undefined;
+		let inputDigest: string | undefined;
 		try {
-			digest = sha256(canonicalJson(event.input));
+			inputDigest = sha256(canonicalJson(event.input));
 		} catch {
-			digest = undefined;
+			inputDigest = undefined;
 		}
 		const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
 		try {
-			await current.recordPolicyDecision(
-				modelActor,
-				scopeFor(ctx),
-				event.toolName,
-				event.toolCallId,
-				decision.allow,
-				decision.reason,
-				digest,
-			);
+			await current.recordPolicyDecision(modelActor, scopeFor(ctx), event.toolName, event.toolCallId, decision.allow, decision.reason, inputDigest);
 		} catch (error) {
 			return { block: true, reason: `Plan Mode failed closed because audit persistence failed: ${error instanceof Error ? error.message : String(error)}` };
 		}
 		if (!decision.allow) return { block: true, reason: `Plan Mode (${SECURITY_LEVEL}): ${decision.reason}` };
 		const finalDecision = evaluateLatest();
-		if (current.state.epoch !== evaluatedState.epoch || !finalDecision.allow) {
-			const reason =
-				current.state.epoch !== evaluatedState.epoch
-					? `Policy epoch changed during preflight (${evaluatedState.epoch} -> ${current.state.epoch})`
-					: `Final pre-execution recheck failed: ${finalDecision.reason}`;
-			try {
-				await current.recordPolicyDecision(modelActor, scopeFor(ctx), event.toolName, event.toolCallId, false, reason, digest);
-			} catch {
-				// The call is blocked regardless; the earlier durable preflight event remains.
-			}
+		if (current.state.revision !== evaluatedRevision || !finalDecision.allow) {
+			const reason = current.state.revision !== evaluatedRevision
+				? `Plan state revision changed during preflight (${evaluatedRevision} -> ${current.state.revision})`
+				: `Final policy recheck failed: ${finalDecision.reason}`;
 			return { block: true, reason: `Plan Mode (${SECURITY_LEVEL}): ${reason}` };
 		}
 	});
 
 	pi.on("tool_result", async (event, ctx) => {
 		const current = ensureController(ctx);
-		if (current.state.status !== "executing" || CONTROL_TOOLS.has(event.toolName)) return;
+		if (current.state.status !== "implementing" || CONTROL_TOOLS.has(event.toolName)) return;
 		let digest: string | undefined;
 		try {
 			digest = sha256(canonicalJson({ content: event.content, details: event.details, isError: event.isError }));
@@ -891,17 +772,18 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 		if (pendingFlagAction) {
 			const pending = pendingFlagAction;
 			pendingFlagAction = undefined;
-			const diffVersions = [pending.extra.fromVersion, pending.extra.toVersion].filter((value): value is number => value !== undefined);
-			const result =
-				pending.action === "diff" && diffVersions.some((value) => !Number.isSafeInteger(value) || value < 1)
-					? resultError(current, pending.action, {
-							code: "INVALID_ACTION",
-							message: "Diff version flags must be positive integers",
-							retryable: true,
-						})
-					: await dispatch(ctx, pending.action, pending.extra, pending.expectedPlan, pending.actor);
+			let result: PlanActionResult;
+			if ((pending.action === "implement" || pending.action === "run" || pending.action === "resume") && pending.expectedPlan) {
+				result = await startImplementation(ctx, pending.expectedPlan, pending.actor);
+			} else if (pending.action === "diff") {
+				const versions = [pending.extra.fromVersion, pending.extra.toVersion].filter((value): value is number => value !== undefined);
+				result = versions.some((value) => !Number.isSafeInteger(value) || value < 1)
+					? resultError(current, "diff", { code: "INVALID_ACTION", message: "Diff versions must be positive integers", retryable: true })
+					: await dispatch(ctx, "diff", pending.extra, pending.expectedPlan, pending.actor);
+			} else {
+				result = await dispatch(ctx, pending.action, pending.extra, pending.expectedPlan, pending.actor);
+			}
 			emitResult(ctx, result);
-			if (result.ok && result.state.status === "executing") queueExecutionTurn(ctx, "Non-interactive execution was authorized.");
 			return { action: "handled" };
 		}
 		if (current.state.status !== "awaiting_input") return { action: "continue" };
@@ -913,168 +795,189 @@ export default function planModeExtension(pi: ExtensionAPI): void {
 	pi.on("context", async (event) => ({
 		messages: event.messages.filter((message) => {
 			const customType = (message as { customType?: string }).customType;
-			return customType !== CONTEXT_TYPE && customType !== "plan-mode/review";
+			return (
+				customType !== CONTEXT_TYPE &&
+				customType !== "plan-mode/review-v2" &&
+				customType !== "plan-mode/continue-v2" &&
+				customType !== "plan-mode/continue-planning-v2"
+			);
 		}),
 	}));
 
 	pi.on("before_agent_start", async (_event, ctx) => {
 		const current = ensureController(ctx);
-		await enforceLiveDrift(ctx);
-		applyVisibleTools(ctx);
+		const applied = applyStateTools(ctx);
+		if (!applied.ok && current.state.status === "implementing") {
+			await dispatch(ctx, "pause", { reason: applied.reason ?? "Implementation tools disappeared" }, undefined, { channel: "system", id: "tool-readback-guard" });
+			toolSession.applyPlanning(managedToolsForStatus("paused"));
+			loop.reset();
+		}
 		updateUI(ctx);
 		const state = current.state;
 		if (state.status === "inactive") return;
-		const ref = state.planRef ? `${state.planRef.planId}@${state.planRef.version}:${state.planRef.contentHash}` : "not-yet-submitted";
-		const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const spec = current.spec;
+		const step = spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const content = state.status === "planning"
+			? "Plan read-only. Use only source-verified research tools. Ask material questions with plan_question. Submit goal, decisions, steps(title/actions/files/validation), and risks with plan_submit. Do not declare capability/path grants."
+			: state.status === "awaiting_input"
+				? `Wait for clarification: ${state.pendingInput?.prompt ?? "input required"}`
+				: state.status === "review"
+					? "The plan is awaiting an explicit review decision. Do not implement or self-approve."
+					: state.status === "implementing" && step
+						? `Implement ${step.id}: ${step.title}. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}. Ordinary tools use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when done, or ${BLOCK_TOOL} for a real blocker.`
+						: state.status === "completed"
+							? "All steps are complete. Give the final changed-files, validation, deviations, and risks summary now."
+							: state.status === "paused"
+								? "Plan implementation is paused. Do not mutate until the user confirms /plan resume."
+								: state.status === "stale"
+									? `Plan integrity is stale: ${state.reason ?? "unknown error"}. Report only; do not implement.`
+									: "Plan tracking is terminal; do not perform plan work.";
 		return {
 			message: {
 				customType: CONTEXT_TYPE,
 				display: false,
-				content: `[PLAN MODE]\nstate=${state.status}\nepoch=${state.epoch}\nsecurity=${SECURITY_LEVEL}\nplanRef=${ref}\n\n` +
-					(state.status === "researching"
-						? "Research with built-in read/grep/find/ls only. Use plan_question only for material uncertainty. When ready, call plan_submit; it will show the plan and request one execution confirmation. Do not modify project files."
-						: state.status === "awaiting_input"
-							? `Stop and wait for the requested clarification: ${state.pendingInput?.prompt ?? "input required"}`
-							: state.status === "review"
-								? "The plan is ready but was not confirmed. Wait for the user to revise it or run it; never self-approve."
-								: state.status === "approved"
-									? "A legacy approval exists without an active grant. Wait for the user's run action."
-									: state.status === "executing" && step
-										? `Execute current Todo ${step.id}: ${step.title}. Allowed write paths: ${step.pathScopes.join(", ") || "none"}. Capabilities: ${step.requiredCapabilities.join(", ") || "fs.read"}. Acceptance: ${step.acceptance.join("; ")}. Continue without per-step user approval. Once successful tool evidence covers every declared capability, call ${COMPLETE_TOOL} with a concise summary and proceed to the next Todo. If genuinely blocked, a material scope change is required, or a new high-risk decision appears, call ${BLOCK_TOOL} with the exact reason instead of merely stopping.`
-										: "Plan Mode is paused, stale, completed, or failed. Do not perform plan mutations until a valid user action or automatic completion cleanup."),
+				content: `[PLAN MODE v2]\nstate=${state.status}\nrevision=${state.revision}\nsecurity=${SECURITY_LEVEL}\n\n${content}`,
 			},
 		};
 	});
 
-	pi.on("agent_end", async (_event, ctx) => {
-		const current = ensureController(ctx);
-		const state = current.state;
-		if (state.status === "completed") {
-			if (ctx.hasUI) ctx.ui.notify("Plan completed", "info");
-			const reset = await dispatch(ctx, "reset", {}, undefined, { channel: "system", id: "automatic-completion-cleanup" });
-			if (!reset.ok) emitResult(ctx, reset);
-			lastExecutionSignature = undefined;
-			stagnantExecutionTurns = 0;
-			autonomousContinuationTurns = 0;
-			return;
-		}
-		if (state.status !== "executing") {
-			lastExecutionSignature = undefined;
-			stagnantExecutionTurns = 0;
-			autonomousContinuationTurns = 0;
-			return;
-		}
+	pi.on("agent_start", () => {
+		loop.onAgentStart();
+	});
 
-		const stepState = state.currentStepId ? state.steps[state.currentStepId] : undefined;
-		const signature = `${state.currentStepId ?? "none"}:${stepState?.evidenceIds.length ?? 0}`;
-		stagnantExecutionTurns = signature === lastExecutionSignature ? stagnantExecutionTurns + 1 : 0;
-		lastExecutionSignature = signature;
-		if (stagnantExecutionTurns >= MAX_STAGNANT_TURNS || autonomousContinuationTurns >= MAX_AUTONOMOUS_CONTINUATIONS) {
-			const reason =
-				stagnantExecutionTurns >= MAX_STAGNANT_TURNS
-					? "Execution paused after two automatic continuation turns made no tool-evidence progress"
-					: "Execution paused after reaching the autonomous continuation safety limit";
-			const paused = await dispatch(
-				ctx,
-				"pause",
-				{ reason },
-				undefined,
-				{ channel: "system", id: "autonomous-continuation-guard" },
-			);
-			emitResult(ctx, paused);
-			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+	pi.on("agent_settled", async (_event, ctx) => {
+		const current = ensureController(ctx);
+		const decision = loop.onSettled(current.state);
+		if (decision.kind === "queue-step" || decision.kind === "queue-final") {
+			queueDecision(ctx, decision);
 			return;
 		}
-		autonomousContinuationTurns += 1;
-		queueExecutionTurn(ctx, `Todo ${state.currentStepId ?? "unknown"} is still active.`);
+		if (decision.kind === "pause") {
+			const paused = await dispatch(ctx, "pause", { reason: decision.reason }, undefined, { channel: "system", id: "settled-loop-guard" });
+			if (paused.ok) toolSession.applyPlanning(managedToolsForStatus("paused"));
+			updateUI(ctx);
+			emitResult(ctx, paused);
+			if (ctx.hasUI) ctx.ui.notify(decision.reason, "warning");
+			return;
+		}
+		if (decision.kind === "archive") await restoreAndArchive(ctx, decision.reason);
+	});
+
+	pi.on("model_select", async (_event, ctx) => {
+		const current = ensureController(ctx);
+		if (current.state.status !== "implementing") return;
+		if (!ctx.isIdle()) ctx.abort();
+		const paused = await dispatch(ctx, "pause", { reason: "Paused because the active model changed" }, undefined, { channel: "system", id: "model-change-guard" });
+		if (paused.ok) toolSession.applyPlanning(managedToolsForStatus("paused"));
+		loop.reset();
+		updateUI(ctx);
 	});
 
 	pi.on("session_start", async (event, ctx) => {
 		if (!deckModeListener) {
 			deckModeListener = pi.events.on("operations-deck:mode", (data) => {
-				const mode = (data as { mode?: string } | undefined)?.mode;
-				const controlled = mode === "full";
+				const controlled = (data as { mode?: string } | undefined)?.mode === "full";
 				if (controlled !== deckControlsWidget) {
 					deckControlsWidget = controlled;
 					updateUI(ctx);
 				}
 			});
 		}
+		const initialActiveTools = pi.getActiveTools();
 		const current = ensureController(ctx);
-		const digests = { policyDigest: policyDigest(pi), contextDigest: contextDigest(ctx) };
-		await current.recover(ctx.sessionManager.getBranch(), event.reason, scopeFor(ctx), digests);
-		await enforceLiveDrift(ctx);
+		await current.recover(ctx.sessionManager.getBranch(), event.reason, scopeFor(ctx), { activeTools: initialActiveTools });
+		if (current.legacySpec && !current.baseline) legacyBaselineCandidate = initialActiveTools;
+		if (current.state.status === "completed" || current.state.status === "cancelled" || current.state.status === "failed") {
+			await restoreAndArchive(ctx, "Recovered terminal plan archived");
+		} else {
+			applyStateTools(ctx);
+		}
+		if (!configNoticeShown && (loadedConfig.diagnostics.length || registry.diagnostics.length)) {
+			configNoticeShown = true;
+			const message = [...loadedConfig.diagnostics, ...registry.diagnostics].map((item) => item.message).join("; ");
+			if (ctx.hasUI) ctx.ui.notify(`Plan policy diagnostics: ${message}`, "warning");
+		}
 		if (!startupFlagsHandled && event.reason === "startup") {
 			startupFlagsHandled = true;
 			if (pi.getFlag("plan") === true && current.state.status === "inactive") {
-				pendingStartupNotice = await dispatch(ctx, "start", {
-					goal: asStringFlag(pi, "plan-goal") ?? "Plan the user's initial request without making project changes",
-				});
+				pendingStartupNotice = await startWithGoal(ctx, asStringFlag(pi, "plan-goal") ?? "Plan the user's initial request");
 			}
 			const rawAction = asStringFlag(pi, "plan-action");
 			if (rawAction) {
-				const fromVersion = asVersionFlag(pi, "plan-from-version");
-				const toVersion = asVersionFlag(pi, "plan-to-version");
+				const aliases: Record<string, PlanAction> = { execute: "implement", approve: "implement" };
 				pendingFlagAction = {
-					action: rawAction as PlanAction,
+					action: aliases[rawAction] ?? (rawAction as PlanAction),
 					expectedPlan: expectedFromFlags(pi),
 					extra: {
 						goal: asStringFlag(pi, "plan-goal"),
-						fromVersion,
-						toVersion,
+						fromVersion: asVersionFlag(pi, "plan-from-version"),
+						toVersion: asVersionFlag(pi, "plan-to-version"),
 					},
 					actor: { channel: ctx.mode, id: `cli-${ctx.mode}-unverified` },
 				};
 			}
 		}
-		applyVisibleTools(ctx);
 		updateUI(ctx);
 	});
 
-	pi.on("session_shutdown", () => {
-		if (deckModeListener) {
-			deckModeListener();
-			deckModeListener = undefined;
-		}
-		deckControlsWidget = false;
+	pi.on("session_before_switch", async (_event, ctx) => {
+		const current = ensureController(ctx);
+		if (current.state.status !== "implementing") return;
+		if (!ctx.isIdle()) ctx.abort();
+		await dispatch(ctx, "pause", { reason: "Paused before session replacement" }, undefined, { channel: "system", id: "session-switch-guard" });
+		toolSession.applyPlanning(managedToolsForStatus("paused"));
+		loop.reset();
 	});
 
 	pi.on("session_before_tree", async (_event, ctx) => {
 		const current = ensureController(ctx);
-		if (current.state.status === "executing") {
+		treeFallbackBaseline = current.baseline;
+		if (current.state.status === "implementing") {
 			if (!ctx.isIdle()) ctx.abort();
-			await dispatch(ctx, "pause", { reason: "Paused before session tree navigation" }, undefined, { channel: "system", id: "tree-guard" });
+			await dispatch(ctx, "pause", { reason: "Paused before tree navigation" }, undefined, { channel: "system", id: "tree-guard" });
+			toolSession.applyPlanning(managedToolsForStatus("paused"));
+			loop.reset();
 		}
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
 		const current = ensureController(ctx);
-		await current.recover(ctx.sessionManager.getBranch(), "tree", scopeFor(ctx), {
-			policyDigest: policyDigest(pi),
-			contextDigest: contextDigest(ctx),
-		});
-		await enforceLiveDrift(ctx);
-		applyVisibleTools(ctx);
+		await current.recover(ctx.sessionManager.getBranch(), "tree", scopeFor(ctx), { activeTools: pi.getActiveTools() });
+		if (current.state.status === "inactive" && treeFallbackBaseline) toolSession.restoreBaseline(treeFallbackBaseline);
+		else applyStateTools(ctx);
+		treeFallbackBaseline = undefined;
+		loop.reset();
 		updateUI(ctx);
 	});
 
 	pi.on("session_before_fork", async (_event, ctx) => {
 		const current = ensureController(ctx);
-		if (current.state.status === "executing") {
-			if (!ctx.isIdle()) ctx.abort();
-			await dispatch(ctx, "pause", { reason: "Paused before fork/clone" }, undefined, { channel: "system", id: "fork-guard" });
-		}
+		if (current.state.status !== "implementing") return;
+		if (!ctx.isIdle()) ctx.abort();
+		await dispatch(ctx, "pause", { reason: "Paused before fork/clone" }, undefined, { channel: "system", id: "fork-guard" });
+		toolSession.applyPlanning(managedToolsForStatus("paused"));
+		loop.reset();
 	});
 
 	pi.on("session_before_compact", async (_event, ctx) => {
-		// Public API 0.84.1 cannot append instructions without replacing compaction.
-		// The authoritative custom journal remains outside the lossy summary.
 		updateUI(ctx);
 	});
 
 	pi.on("session_compact", async (_event, ctx) => {
-		// Re-apply visibility immediately; before_agent_start re-injects the authoritative pointer next turn.
-		applyVisibleTools(ctx);
+		applyStateTools(ctx);
 		updateUI(ctx);
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		const current = controller;
+		if (current?.state.status === "implementing") {
+			await current.dispatch(
+				request("pause", { channel: "system", id: "shutdown-guard" }),
+				{ scope: scopeFor(ctx), reason: "Paused during session shutdown" },
+			);
+		}
+		deckModeListener?.();
+		deckModeListener = undefined;
+		deckControlsWidget = false;
 	});
 }

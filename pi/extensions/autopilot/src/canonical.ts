@@ -1,8 +1,8 @@
 import * as path from "node:path";
-import { canonicalJson, normalizePathScope, sha256 } from "../../plan-mode/src/canonical.ts";
+import { canonicalJson, comparePaths, normalizePathScope, sha256 } from "../../plan-mode/src/canonical.ts";
 import { MISSION_SCHEMA, type AcceptanceCriterion, type MissionDraft, type MissionSpec } from "./domain.ts";
 
-export { canonicalJson, normalizePathScope, sha256 } from "../../plan-mode/src/canonical.ts";
+export { canonicalJson, comparePaths, normalizePathScope, sha256 } from "../../plan-mode/src/canonical.ts";
 
 export function calculateMissionHash(spec: Omit<MissionSpec, "contentHash"> | MissionSpec): string {
 	const { contentHash: _ignored, ...hashable } = spec as MissionSpec;
@@ -100,8 +100,21 @@ export function validateMissionSpec(spec: MissionSpec): string[] {
 			}
 		}
 		const paths = snapshot.entries.map((entry) => entry.path);
-		if (new Set(paths).size !== paths.length || canonicalJson(paths) !== canonicalJson([...paths].sort())) {
-			errors.push("workspace snapshot entries must have unique sorted paths");
+		const firstIndex = new Map<string, number>();
+		for (const [index, entry] of paths.entries()) {
+			const previous = firstIndex.get(entry);
+			if (previous !== undefined) {
+				errors.push(`workspace snapshot entries contain duplicate path '${entry}' at indices ${previous} and ${index}`);
+			} else {
+				firstIndex.set(entry, index);
+			}
+		}
+		for (let index = 1; index < paths.length; index++) {
+			if (comparePaths(paths[index - 1], paths[index]) > 0) {
+				errors.push(
+					`workspace snapshot entries are not sorted: '${paths[index]}' (index ${index}) should sort before '${paths[index - 1]}' (index ${index - 1})`,
+				);
+			}
 		}
 		const expectedSnapshotDigest = sha256(
 			canonicalJson({

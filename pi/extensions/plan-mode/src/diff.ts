@@ -14,7 +14,7 @@ export interface PlanStepChange {
 }
 
 export interface PlanDiff {
-	readonly schema: "dev.pi.plan-diff/v1";
+	readonly schema: "dev.pi.plan-diff/v2";
 	readonly from: PlanRef;
 	readonly to: PlanRef;
 	readonly changed: boolean;
@@ -23,14 +23,11 @@ export interface PlanDiff {
 }
 
 function equal(left: unknown, right: unknown): boolean {
-	return canonicalJson(left) === canonicalJson(right);
+	const normalize = (value: unknown): unknown => (value === undefined ? null : value);
+	return canonicalJson(normalize(left)) === canonicalJson(normalize(right));
 }
 
-function collectFields(
-	left: Record<string, unknown>,
-	right: Record<string, unknown>,
-	fields: readonly string[],
-): PlanFieldChange[] {
+function collectFields(left: Record<string, unknown>, right: Record<string, unknown>, fields: readonly string[]): PlanFieldChange[] {
 	const changes: PlanFieldChange[] = [];
 	for (const field of fields) {
 		if (!equal(left[field], right[field])) changes.push({ field, before: left[field], after: right[field] });
@@ -41,13 +38,9 @@ function collectFields(
 function stepChanges(before: PlanStepSpec, after: PlanStepSpec): PlanFieldChange[] {
 	return collectFields(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>, [
 		"title",
-		"purpose",
 		"actions",
-		"dependencyScopes",
-		"pathScopes",
-		"requiredCapabilities",
-		"acceptance",
-		"rollback",
+		"files",
+		"validation",
 	]);
 }
 
@@ -55,19 +48,10 @@ export function diffPlanSpecs(before: PlanSpec, after: PlanSpec): PlanDiff {
 	if (before.planId !== after.planId) throw new TypeError("Cannot diff PlanSpecs from different planId lineages");
 	const planChanges = collectFields(before as unknown as Record<string, unknown>, after as unknown as Record<string, unknown>, [
 		"goal",
-		"facts",
-		"assumptions",
+		"decisions",
 		"risks",
-		"policyDigest",
-		"contextDigest",
+		"importedFrom",
 	]);
-	if (before.workspaceSnapshot?.digest !== after.workspaceSnapshot?.digest) {
-		planChanges.push({
-			field: "workspaceSnapshot.digest",
-			before: before.workspaceSnapshot?.digest ?? null,
-			after: after.workspaceSnapshot?.digest ?? null,
-		});
-	}
 	const beforeSteps = new Map(before.steps.map((step) => [step.id, step]));
 	const afterSteps = new Map(after.steps.map((step) => [step.id, step]));
 	const order = [...before.steps.map((step) => step.id), ...after.steps.map((step) => step.id).filter((id) => !beforeSteps.has(id))];
@@ -89,7 +73,7 @@ export function diffPlanSpecs(before: PlanSpec, after: PlanSpec): PlanDiff {
 		}
 	}
 	return {
-		schema: "dev.pi.plan-diff/v1",
+		schema: "dev.pi.plan-diff/v2",
 		from: toPlanRef(before),
 		to: toPlanRef(after),
 		changed: planChanges.length > 0 || changedSteps.length > 0,
@@ -115,9 +99,7 @@ export function renderPlanDiffMarkdown(diff: PlanDiff): string {
 		"## Plan fields",
 	];
 	if (!diff.planChanges.length) lines.push("- No plan-level changes");
-	for (const change of diff.planChanges) {
-		lines.push(`- **${change.field}**: ${inline(change.before)} → ${inline(change.after)}`);
-	}
+	for (const change of diff.planChanges) lines.push(`- **${change.field}**: ${inline(change.before)} → ${inline(change.after)}`);
 	lines.push("", "## Steps");
 	if (!diff.stepChanges.length) lines.push("- No step changes");
 	for (const step of diff.stepChanges) {

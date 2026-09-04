@@ -1,18 +1,16 @@
 import type { ExecutionState, PlanStatus } from "./domain.ts";
 
 const ALLOWED_TRANSITIONS: Readonly<Record<PlanStatus, ReadonlySet<PlanStatus>>> = {
-	inactive: new Set(["researching"]),
-	researching: new Set(["awaiting_input", "review", "cancelled", "failed"]),
-	awaiting_input: new Set(["researching", "review", "cancelled", "failed"]),
-	review: new Set(["review", "approved", "rejected", "cancelled", "failed"]),
-	approved: new Set(["review", "executing", "stale", "cancelled", "failed"]),
-	executing: new Set(["executing", "paused", "completed", "stale", "cancelled", "failed"]),
-	paused: new Set(["review", "executing", "stale", "cancelled", "failed"]),
+	inactive: new Set(["planning"]),
+	planning: new Set(["awaiting_input", "review", "cancelled", "failed", "stale"]),
+	awaiting_input: new Set(["planning", "cancelled", "failed", "stale"]),
+	review: new Set(["review", "planning", "implementing", "cancelled", "failed", "stale"]),
+	implementing: new Set(["implementing", "paused", "completed", "cancelled", "failed", "stale"]),
+	paused: new Set(["planning", "review", "implementing", "cancelled", "failed", "stale"]),
 	completed: new Set(["inactive"]),
-	rejected: new Set(["inactive", "researching"]),
-	cancelled: new Set(["inactive", "researching"]),
-	stale: new Set(["review", "cancelled", "failed"]),
-	failed: new Set(["inactive", "researching"]),
+	cancelled: new Set(["inactive"]),
+	stale: new Set(["cancelled", "inactive"]),
+	failed: new Set(["inactive"]),
 };
 
 export class InvalidTransitionError extends Error {
@@ -20,7 +18,7 @@ export class InvalidTransitionError extends Error {
 	readonly to: PlanStatus;
 
 	constructor(from: PlanStatus, to: PlanStatus) {
-		super(`Invalid Plan Mode transition: ${from} -> ${to}`);
+		super(`Invalid Plan Mode v2 transition: ${from} -> ${to}`);
 		this.name = "InvalidTransitionError";
 		this.from = from;
 		this.to = to;
@@ -36,13 +34,13 @@ export function assertTransition(from: PlanStatus, to: PlanStatus): void {
 }
 
 export function isTerminal(status: PlanStatus): boolean {
-	return status === "completed" || status === "rejected" || status === "cancelled" || status === "failed";
+	return status === "completed" || status === "cancelled" || status === "failed";
 }
 
-export function hasElevatedGrant(state: ExecutionState): boolean {
-	return state.status === "executing" && state.grantId !== undefined;
+export function hasImplementationAuthority(state: ExecutionState): boolean {
+	return state.status === "implementing" && state.approvalId !== undefined;
 }
 
-export function usesPlanningSafePolicy(status: PlanStatus): boolean {
-	return status !== "inactive";
+export function usesPlanningPolicy(status: PlanStatus): boolean {
+	return status === "planning" || status === "awaiting_input" || status === "review" || status === "paused" || status === "stale";
 }

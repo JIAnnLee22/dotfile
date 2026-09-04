@@ -12,7 +12,7 @@
 | `ffgrep` / `fffind` | 内容/路径模糊搜索 | 见下方 @ff-labs/pi-fff |
 | `web_search` 等 | 网络搜索与内容抓取 | 见下方 pi-web-access |
 | `ctx_*` | 上下文管理 | 见下方 context-mode |
-| `parallel_tasks` | 并行只读调研（probe/analyst/verifier 角色） | 子任务必须自包含、只读 |
+| `parallel_tasks` | 并行子任务：只读调研（probe/analyst/verifier/reviewer）+ 隔离编码（implementer，产出 diff） | 子任务必须自包含、互不依赖 |
 | `plan_question` / `plan_submit` / `plan_step_complete` / `plan_blocked` | 计划模式四件套 | plan 模式工作流 |
 
 ## @ff-labs/pi-fff（v0.10.3）
@@ -49,7 +49,7 @@ FFF 模糊搜索，是定位代码的首选工具，git-aware + frecency 排序�
 |------|------|
 | 找文件/符号 | fffind → read |
 | 找内容/调用点 | ffgrep（exclude 噪音） |
-| 多块独立调研 | parallel_tasks |
+| 多块独立调研/编码 | parallel_tasks |
 | 大输出分析 | ctx_execute / ctx_execute_file |
 | 文档长期记忆 | ctx_index / ctx_fetch_and_index |
 | 网页资料/事实核验 | web_search / source_check / fetch_content |

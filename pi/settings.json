@@ -1,8 +1,8 @@
 {
   "collapseChangelog": true,
-  "defaultModel": "muse-spark-1.2-contributor",
+  "defaultModel": "DeepSeek-V4-Pro-tx",
   "defaultProjectTrust": "ask",
-  "defaultProvider": "opencode-go",
+  "defaultProvider": "vimedia",
   "defaultThinkingLevel": "high",
   "doubleEscapeAction": "tree",
   "editorPaddingX": 0,
@@ -11,7 +11,7 @@
   ],
   "fullscreenScrollbar": "hidden",
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.84.2",
+  "lastChangelogVersion": "0.84.4",
   "outputPad": 0,
   "packages": [
     "npm:@ff-labs/pi-fff",

@@ -38,9 +38,9 @@ export const opencodeGoProvider: UsageProvider = {
 		return {
 			title: "OpenCode Go Usage",
 			snapshots: [
-				{ label: "5时", percent: u.rolling.percent, resetsAt: u.rolling.resetsAt },
-				{ label: "周 ", percent: u.weekly.percent, resetsAt: u.weekly.resetsAt },
-				{ label: "月 ", percent: u.monthly.percent, resetsAt: u.monthly.resetsAt },
+				{ label: "5时", percent: 100 - u.rolling.percent, resetsAt: u.rolling.resetsAt },
+				{ label: "周 ", percent: 100 - u.weekly.percent, resetsAt: u.weekly.resetsAt },
+				{ label: "月 ", percent: 100 - u.monthly.percent, resetsAt: u.monthly.resetsAt },
 			],
 			extra: data.useBalance ? "余额模式" : undefined,
 			raw: data,

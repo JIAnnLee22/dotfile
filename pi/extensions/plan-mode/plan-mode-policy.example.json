@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "name": "my_project_search",
+      "capabilities": ["workspace.read"],
+      "source": "npm:my-reviewed-package",
+      "path": "npm/node_modules/my-reviewed-package/index.js",
+      "planning": "always",
+      "pathAdapter": "optional-path"
+    },
+    {
+      "name": "my_docs_fetch",
+      "capabilities": ["network.read"],
+      "source": "npm:my-reviewed-package",
+      "path": "npm/node_modules/my-reviewed-package/index.js",
+      "planning": "confirm-per-plan",
+      "pathAdapter": "none"
+    }
+  ]
+}

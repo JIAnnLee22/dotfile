@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { canonicalJson, normalizePathScope, sha256 } from "./canonical.ts";
-import type { PlanDraft, PlanSpec, WorkspaceSnapshot, WorkspaceSnapshotEntry } from "./domain.ts";
+import { canonicalJson, comparePaths, normalizePathScope, sha256 } from "./canonical.ts";
+import type {
+	LegacyPlanDraft,
+	LegacyPlanSpec,
+	LegacyWorkspaceSnapshot,
+	LegacyWorkspaceSnapshotEntry,
+} from "./legacy-v1.ts";
 
 export interface WorkspaceSnapshotLimits {
 	readonly maxScopes: number;
@@ -30,7 +35,7 @@ export class WorkspaceSnapshotError extends Error {
 	}
 }
 
-export function dependencyScopes(value: PlanDraft | PlanSpec): string[] {
+export function dependencyScopes(value: LegacyPlanDraft | LegacyPlanSpec): string[] {
 	return value.steps.flatMap((step) => step.dependencyScopes ?? []);
 }
 
@@ -77,12 +82,12 @@ export async function captureWorkspaceSnapshot(
 	rawScopes: readonly string[],
 	options: Partial<WorkspaceSnapshotLimits> = {},
 	now = () => new Date().toISOString(),
-): Promise<WorkspaceSnapshot> {
+): Promise<LegacyWorkspaceSnapshot> {
 	const limits = { ...DEFAULT_WORKSPACE_LIMITS, ...options };
 	const scopes = normalizeScopes(rawScopes, limits);
 	const root = await fs.realpath(path.resolve(cwd));
 	const started = Date.now();
-	const entries = new Map<string, WorkspaceSnapshotEntry>();
+	const entries = new Map<string, LegacyWorkspaceSnapshotEntry>();
 	let totalBytes = 0;
 
 	const checkBudget = (depth: number): void => {
@@ -181,7 +186,7 @@ export async function captureWorkspaceSnapshot(
 		await scan(absolute, directory ? "directory" : "exact", 0);
 	}
 
-	const sortedEntries = [...entries.values()].sort((left, right) => left.path.localeCompare(right.path));
+	const sortedEntries = [...entries.values()].sort((left, right) => comparePaths(left.path, right.path));
 	const hashable = { schema: "dev.pi.workspace-snapshot/v1" as const, scopes, entries: sortedEntries, totalBytes };
 	return {
 		...hashable,
@@ -190,6 +195,9 @@ export async function captureWorkspaceSnapshot(
 	};
 }
 
-export function workspaceSnapshotMatches(expected: WorkspaceSnapshot | undefined, actual: WorkspaceSnapshot | undefined): boolean {
+export function workspaceSnapshotMatches(
+	expected: LegacyWorkspaceSnapshot | undefined,
+	actual: LegacyWorkspaceSnapshot | undefined,
+): boolean {
 	return expected === undefined ? true : actual !== undefined && expected.digest === actual.digest;
 }

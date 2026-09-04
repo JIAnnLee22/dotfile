@@ -1,40 +1,50 @@
 # Pi 配置仓库协作说明
 
-## Plan Mode 后续开发交接
+## Plan Mode v2 后续开发交接
 
 当用户要求继续开发 Pi Coding Agent 的计划模式时，必须先完整阅读：
 
-1. `PLAN_MODE_REQUIREMENTS_A.md` — 主需求基线，产品流程、MVP 范围和验收要求以此为准。
-2. `PLAN_MODE_REQUIREMENTS_B.md` — 技术与安全补充，用于状态机、权限、持久化、审计和测试设计。
-3. Pi 安装包的 `README.md`、`docs/extensions.md`、`docs/tui.md`，以及 `examples/extensions/plan-mode/` 下的全部文件。
+1. `PLAN_MODE_REQUIREMENTS_A.md` — **v0.4 产品与交互主基线**。
+2. `PLAN_MODE_REQUIREMENTS_B.md` — v0.4 架构、安全、持久化和测试补充；与 A 冲突时以 A 为准。
+3. 当前安装 Pi 0.84.4 的 `README.md`、`docs/extensions.md`、`docs/tui.md`、session/RPC 文档和 `examples/extensions/plan-mode/` 全部文件。
+4. 当前 `extensions/plan-mode/` 实现、测试以及 `extensions/autopilot/src/canonical.ts` 的共享依赖。
 
-### 已有评审结论
+### 已确认产品语义
 
-- 选择方案 A 作为后续开发指导文档的主基线，方案 B 只作为技术补充。
-- 两份文档目前均是评审草案，不应不加修订地直接编码。
-- 开发前应先将方案 A 修订为 v0.2，至少解决：
-  1. 将不可变 `PlanSpec`、`ApprovalRecord`、可变 `ExecutionState` 和 `AuditEvent` 分离。
-  2. 定义 TUI、Print、JSON、RPC 的统一审批、查询、执行和错误协议。
-  3. 明确 extension-only 的安全边界；`setActiveTools()` 仅用于降低工具可见性，不是安全边界。
-  4. 明确审批是普通模式解锁，还是带能力、路径及步骤范围的 `ExecutionGrant`。
-  5. 补全 `stale/cancelled/failed/completed` 转换，以及 `/tree`、resume、fork、clone、compaction 后的恢复规则。
-  6. 建立需求 ID 到里程碑、实现和测试的追踪矩阵。
+- 用户流程采用主流模式：**规划期只读 → 调研/澄清 → 审阅或编辑 → 一次实施确认 → 连续实施**。
+- 用户选择实施后恢复普通 Pi 权限，不再使用逐步骤 `ExecutionGrant`、`pathScopes`、capability evidence 作为硬门禁。
+- 仍必须通过 `plan_step_complete` 逐步上报并自动续跑；步骤总结是权威进度入口，工具证据仅作信息性审计。
+- PlanSpec v2 对模型只暴露目标、关键决策、步骤、涉及文件、验证和风险；内部保留不可变 JSON、Markdown、版本/hash 与 ApprovalRecord。
+- 实施前必须显示并临时启用内置 `edit/write/bash`，执行 `setActiveTools()` 后用 `getActiveTools()` 读回；读回成功后才能提交审批和 `implementing`。
+- reload/resume/model change/process restart、tree、fork/clone 均不得自动实施；按 A v0.4 恢复为 paused 并要求一次 resume 确认。
+- v1 工件只读保留；旧 active 计划先 paused，生成 v2 新 lineage 后再确认。
+
+### 规划期工具策略
+
+- 使用来源锁定 capability registry；未知、来源不匹配、配置错误或不可证明副作用的工具 fail-closed。
+- 默认允许来源匹配的 builtin `read/grep/find/ls`、fff `ffgrep/fffind`、context-mode `ctx_search/ctx_stats/ctx_doctor`。
+- context-mode 1.0.169 的 `ctx_execute`、`ctx_execute_file`、`ctx_batch_execute` 实测可在项目 cwd 持久写宿主，规划期必须拒绝，不得按“sandbox”文案归类为只读。
+- web-access 以及 `ctx_index/ctx_fetch_and_index` 每个计划首次调用时确认；Print/JSON 无 UI 不授权。
+- `ctx_upgrade/ctx_purge/ctx_insight` 规划期始终拒绝。
+- 用户扩展配置位于 `$PI_CODING_AGENT_DIR/plan-mode-policy.json`，必须绑定工具名、capability 和 source/path。
 
 ### 实现约束
 
-- 遵守 Pi 的 minimal core / extension-first 哲学；MVP 优先交付为可安装 Extension / Pi Package。
-- 现有 `examples/extensions/plan-mode/` 是基线示例，不应从零重复实现。
-- 不得仅依靠 shell 正则、工具名称、模型输出的 `Plan:` 或 `[DONE:n]` 建立安全或权威状态。
-- 未知或无法验证副作用的工具在规划阶段应 fail-closed。
-- 未获得显式、版本/hash 匹配的批准时，不得进入执行阶段。
-- 若现有扩展 API 无法提供不可绕过的保证，必须明确降级安全承诺，或单独提出最小通用核心增强，不得伪装成已实现的安全边界。
+- 遵守 Pi minimal core / extension-first；本次不修改核心。
+- `setActiveTools()` 只控制可见性且无跨扩展事务；工具读回只能证明提交瞬间 active，不能宣传为不可绕过安全边界。
+- planning/review/paused 的 `tool_call` 是 agent-tools-only 门禁；implementing 下普通工具回到 Pi 原有权限。
+- 状态恢复只读当前 `sessionManager.getBranch()`；custom entry 和工件是权威，compaction 摘要不是。
+- 连续实施必须基于 `agent_settled`，不得用 `agent_end` 判断稳定停止。
+- 不得依赖自由文本 `Plan:`、`[DONE:n]`、工具描述或 name-only capability 改变权威状态/权限。
+- 修改后必须运行 plan-mode 全套、autopilot 全套、Pi 0.84.4 多模式 runtime tests；测试名称引用 A v0.4 需求 ID。
+- 当前工作区存在其他未提交改动；只修改计划声明路径，禁止覆盖 settings/models-store/usage/.codewhale 等无关文件。
 
 ### 新会话启动步骤
 
-1. 检查当前 Git 状态和现有实现。
-2. 阅读上述文档与 Pi 官方本地文档。
-3. 先输出方案 A v0.2 的修订建议和实施计划，确认关键待决策项。
-4. 用户确认后再实现，并同步添加单元、属性、并发、会话恢复和多运行模式测试。
+1. 检查 Git 状态和现有实现，保护用户未提交改动。
+2. 核对安装的 Pi 0.84.4 docs/types，而不是只依赖 `.pi-reference` 0.84.1 镜像。
+3. 对照 A v0.4/B 和追踪矩阵确认当前 Todo；发现产品语义歧义才询问用户。
+4. 实现时同步添加单元、属性、并发、恢复和 TUI/RPC/Print/JSON 测试。
 
 ## Autopilot 扩展（自主开发模式）
 

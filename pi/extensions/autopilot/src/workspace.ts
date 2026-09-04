@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { canonicalJson, normalizePathScope, sha256 } from "./canonical.ts";
+import { canonicalJson, comparePaths, normalizePathScope, sha256 } from "./canonical.ts";
 import type { MissionDraft, MissionSpec, WorkspaceSnapshot, WorkspaceSnapshotEntry } from "./domain.ts";
 
 export interface WorkspaceSnapshotLimits {
@@ -181,7 +181,7 @@ export async function captureWorkspaceSnapshot(
 		await scan(absolute, directory ? "directory" : "exact", 0);
 	}
 
-	const sortedEntries = [...entries.values()].sort((left, right) => left.path.localeCompare(right.path));
+	const sortedEntries = [...entries.values()].sort((left, right) => comparePaths(left.path, right.path));
 	const hashable = { schema: "dev.pi.workspace-snapshot/v1" as const, scopes, entries: sortedEntries, totalBytes };
 	return {
 		...hashable,

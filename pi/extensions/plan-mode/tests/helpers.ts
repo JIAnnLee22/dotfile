@@ -2,8 +2,19 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PlanArtifactStore } from "../src/artifact-store.ts";
+import { CapabilityRegistry, defaultRegistryEntries, type ToolInfoLike } from "../src/capability-registry.ts";
 import { PlanController, type AuditJournalWriter } from "../src/controller.ts";
-import { ACTION_PROTOCOL, type AuditEvent, type PlanAction, type PlanActionRequest, type PlanDraft, type PlanRef, type PlanScope } from "../src/domain.ts";
+import { activeToolsDigest } from "../src/tool-session.ts";
+import {
+	ACTION_PROTOCOL,
+	type AuditEvent,
+	type PlanAction,
+	type PlanActionRequest,
+	type PlanDraft,
+	type PlanRef,
+	type PlanScope,
+	type ToolBaselineRecord,
+} from "../src/domain.ts";
 
 export class MemoryJournal implements AuditJournalWriter {
 	readonly events: AuditEvent[] = [];
@@ -33,7 +44,7 @@ export async function fixture(): Promise<{
 	scope: PlanScope;
 	cleanup(): Promise<void>;
 }> {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-plan-mode-test-"));
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-plan-mode-v2-test-"));
 	const cwd = path.join(root, "project");
 	await fs.mkdir(path.join(cwd, "src"), { recursive: true });
 	await fs.writeFile(path.join(cwd, "src", "existing.ts"), "export const value = 1;\n");
@@ -48,7 +59,7 @@ export async function fixture(): Promise<{
 	const controller = new PlanController({
 		store,
 		journal,
-		now: () => "2026-08-11T00:00:00.000Z",
+		now: () => "2026-09-03T00:00:00.000Z",
 		id: idFactory(),
 	});
 	return { root, cwd, journal, store, controller, scope, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
@@ -56,19 +67,19 @@ export async function fixture(): Promise<{
 
 export const draft: PlanDraft = {
 	goal: "Change the existing value safely",
-	facts: ["src/existing.ts exists"],
-	assumptions: [],
+	decisions: ["Keep the public API stable"],
 	steps: [
 		{
-			id: "S1",
 			title: "Update value",
-			purpose: "Implement the approved change",
 			actions: ["Edit src/existing.ts"],
-			dependencyScopes: ["src/existing.ts"],
-			pathScopes: ["src/existing.ts"],
-			requiredCapabilities: ["fs.read", "fs.write"],
-			acceptance: ["The value is updated"],
-			rollback: ["Restore the previous value"],
+			files: ["src/existing.ts"],
+			validation: ["Read the updated value"],
+		},
+		{
+			title: "Run checks",
+			actions: ["Run regression tests"],
+			files: [],
+			validation: ["Tests pass"],
 		},
 	],
 	risks: ["Incorrect value"],
@@ -88,10 +99,60 @@ export function request(action: PlanAction, expectedPlan?: PlanRef, requestActor
 }
 
 export function environment(scope: PlanScope, extra: Record<string, unknown> = {}) {
+	return { scope, ...extra };
+}
+
+export function baseline(
+	scope: PlanScope,
+	planId = "10000000-0000-4000-8000-000000000001",
+	toolNames: readonly string[] = ["read", "bash", "edit", "write", "ffgrep"],
+): ToolBaselineRecord {
 	return {
-		scope,
-		policyDigest: "policy-digest",
-		contextDigest: "context-digest",
-		...extra,
+		schema: "dev.pi.plan-tool-baseline/v2",
+		baselineId: "20000000-0000-4000-8000-000000000001",
+		planId,
+		toolNames,
+		capturedAt: "2026-09-03T00:00:00.000Z",
+		sessionId: scope.sessionId,
+		branchEntryId: scope.branchLeafId,
 	};
 }
+
+export async function start(controller: PlanController, scope: PlanScope, goal = draft.goal) {
+	return controller.dispatch(request("start"), environment(scope, { goal, baseline: baseline(scope) }));
+}
+
+export async function submit(controller: PlanController, scope: PlanScope, value: PlanDraft = draft) {
+	return controller.dispatch(request("submit", undefined, modelActor), environment(scope, { draft: value }));
+}
+
+export async function prepareReview(controller: PlanController, scope: PlanScope, value: PlanDraft = draft) {
+	await start(controller, scope, value.goal);
+	await submit(controller, scope, value);
+	return controller.state.planRef!;
+}
+
+export function implementationEnvironment(scope: PlanScope) {
+	const activeTools = ["read", "edit", "write", "bash", "plan_step_complete", "plan_blocked"];
+	return environment(scope, { activeTools, activeToolsDigest: activeToolsDigest(activeTools) });
+}
+
+export const AGENT_DIR = "/agent";
+
+export function testRegistry(): CapabilityRegistry {
+	return new CapabilityRegistry(defaultRegistryEntries(AGENT_DIR));
+}
+
+export function builtin(name: string): ToolInfoLike {
+	return { name, sourceInfo: { source: "builtin", path: `<builtin:${name}>` } };
+}
+
+export function packageTool(name: string, source: string, relativePath: string): ToolInfoLike {
+	return { name, sourceInfo: { source, path: `${AGENT_DIR}/npm/node_modules/${relativePath}` } };
+}
+
+export const TOOL_PATHS = {
+	fff: "@ff-labs/pi-fff/src/index.ts",
+	web: "pi-web-access/index.ts",
+	context: "context-mode/build/adapters/pi/extension.js",
+} as const;

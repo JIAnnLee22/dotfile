@@ -43,7 +43,7 @@ async function runRpcBarePlan(goal: string) {
 		let pending = "";
 		let answeredInput = false;
 		let inputRequestTitle: string | undefined;
-		let researchingResultSeen = false;
+		let planningResultSeen = false;
 		let goalTurnSeen = false;
 		const result = await new Promise<{ status: number | null; stdout: string; stderr: string; answeredInput: boolean; inputRequestTitle?: string }>(
 			(resolve, reject) => {
@@ -69,9 +69,9 @@ async function runRpcBarePlan(goal: string) {
 							inputRequestTitle = event.title;
 							child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: event.id, value: goal })}\n`);
 						}
-						if (line.includes("PLAN_ACTION_OK state=researching")) researchingResultSeen = true;
+						if (line.includes("PLAN_ACTION_OK state=planning")) planningResultSeen = true;
 						if (line.includes(goal) || line.includes('"event":"send_user_message"')) goalTurnSeen = true;
-						if (researchingResultSeen && goalTurnSeen && !child.stdin.destroyed) {
+						if (planningResultSeen && goalTurnSeen && !child.stdin.destroyed) {
 							child.stdin.write(`${JSON.stringify({ type: "abort" })}\n`);
 							child.stdin.end();
 						}
@@ -94,34 +94,34 @@ async function runRpcBarePlan(goal: string) {
 	}
 }
 
-test("PM-P0-001/011 Print loads the extension and emits a stable text action result", () => {
+test("PM4-P0-014 Print loads the extension and emits a stable text action result", () => {
 	const result = run(["-p", "/plan status"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.stdout, "", "Pi reserves Print stdout for assistant text");
 	assert.match(result.stderr, /^PLAN_ACTION_OK state=inactive .*security=agent-tools-only/m);
 });
 
-test("PM-P0-001 Print bare /plan fails clearly when no interactive goal input is available", () => {
+test("PM4-P0-014 Print bare /plan fails clearly when no interactive goal input is available", () => {
 	const result = run(["-p", "/plan"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stderr, /PLAN_ACTION_ERROR UI_REQUIRED/);
 	assert.match(result.stderr, /use \/plan <goal>/);
 });
 
-test("PM-P0-001 Print /plan <goal> enters researching without an interactive prompt", () => {
+test("PM4-P0-001 Print /plan <goal> enters planning without an interactive prompt", () => {
 	const result = run(["-p", "/plan inspect the plan command UX"]);
 	assert.equal(result.status, 0, result.stderr);
-	assert.match(result.stderr, /^PLAN_ACTION_OK state=researching /m);
+	assert.match(result.stderr, /^PLAN_ACTION_OK state=planning /m);
 });
 
-test("PM-P0-001/011 RPC bare /plan requests a goal, enters researching, and triggers the goal turn", async () => {
+test("PM4-P0-001/014 RPC bare /plan requests a goal, enters planning, and triggers the goal turn", async () => {
 	const goal = "inspect the plan command UX";
 	const result = await runRpcBarePlan(goal);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.answeredInput, true);
 	assert.equal(result.inputRequestTitle, "Plan goal");
 	const serialized = JSON.stringify(parseJsonLines(result.stdout));
-	assert.match(serialized, /PLAN_ACTION_OK state=researching/);
+	assert.match(serialized, /PLAN_ACTION_OK state=planning/);
 	assert.match(
 		serialized,
 		new RegExp(`${goal}|send_user_message`),
@@ -129,48 +129,48 @@ test("PM-P0-001/011 RPC bare /plan requests a goal, enters researching, and trig
 	);
 });
 
-test("PM-P0-011 Print startup action consumes its placeholder and writes one control result to stderr", () => {
+test("PM4-P0-014 Print startup action consumes its placeholder and writes one control result to stderr", () => {
 	const result = run(["-p", "--plan-action", "status", "trigger-plan-action"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.stdout, "");
 	assert.equal((result.stderr.match(/PLAN_ACTION_OK/g) ?? []).length, 1);
 });
 
-test("P1-01 Print diff command without a plan returns a stable controller error", () => {
+test("PM4-P0-014 Print diff command without a plan returns a stable controller error", () => {
 	const result = run(["-p", "/plan diff"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stderr, /PLAN_ACTION_ERROR INVALID_STATE/);
 });
 
-test("P1-01 JSON diff flags reject a non-integer version", () => {
+test("PM4-P0-014 JSON diff flags reject a non-integer version", () => {
 	const result = run(["--mode", "json", "--plan-action", "diff", "--plan-from-version", "not-a-version", "trigger-plan-action"]);
 	assert.equal(result.status, 0, result.stderr);
 	const serialized = JSON.stringify(parseJsonLines(result.stdout));
 	assert.match(serialized, /PLAN_ACTION_ERROR INVALID_ACTION/);
 });
 
-test("PM-P0-011 JSON emits only JSON lines and includes the extension action result", () => {
+test("PM4-P0-014 JSON emits only JSON lines and includes the extension action result", () => {
 	const result = run(["--mode", "json", "/plan status"]);
 	assert.equal(result.status, 0, result.stderr);
 	const events = parseJsonLines(result.stdout);
 	assert.ok(events.length > 0);
-	assert.match(JSON.stringify(events), /plan-mode\/action-result/);
+	assert.match(JSON.stringify(events), /plan-mode\/action-result-v2/);
 	assert.match(JSON.stringify(events), /PLAN_ACTION_OK/);
 });
 
-test("PM-P0-011 JSON startup flags are emitted after mode subscribers attach", () => {
+test("PM4-P0-014 JSON startup flags are emitted after mode subscribers attach", () => {
 	const result = run(["--mode", "json", "--plan-action", "status", "trigger-plan-action"]);
 	assert.equal(result.status, 0, result.stderr);
 	const serialized = JSON.stringify(parseJsonLines(result.stdout));
 	assert.ok((serialized.match(/PLAN_ACTION_OK/g) ?? []).length >= 2, serialized);
 });
 
-test("PM-P0-011 PM-P0-015 RPC emits action result plus direct-bash boundary warning", () => {
+test("PM4-P0-016 RPC emits action result plus direct-bash boundary warning", () => {
 	const result = run(["--mode", "rpc"], `${JSON.stringify({ type: "prompt", message: "/plan status" })}\n`);
 	assert.equal(result.status, 0, result.stderr);
 	const events = parseJsonLines(result.stdout);
 	const serialized = JSON.stringify(events);
-	assert.match(serialized, /plan-mode\/action-result/);
+	assert.match(serialized, /plan-mode\/action-result-v2/);
 	assert.match(serialized, /SAFETY_BOUNDARY_DEGRADED/);
 	assert.match(serialized, /agent-tools-only/);
 });
