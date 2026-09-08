@@ -359,8 +359,36 @@ type PlanActionV2 =
 | PM4-P0-007/008/009 | `src/controller.ts`、`src/execution-loop.ts`、`index.ts` | `controller.test.ts`、`execution-loop.test.ts` |
 | PM4-P0-011/012/015 | `src/journal.ts`、`src/controller.ts`、session hooks | `recovery.test.ts`、`concurrency-property.test.ts` |
 | PM4-P0-016 | `README.md`、TUI/RPC warning | `runtime-modes.test.ts` |
+| PM4-P1-001 | `src/review-ui.ts`、`index.ts` | `ui.test.ts`、`modes.test.ts`、`runtime-modes.test.ts` |
+| PM4-P1-002 | `src/domain.ts`、`src/canonical.ts`、`src/controller.ts`、`src/execution-loop.ts`、`index.ts` | `canonical.test.ts`、`controller.test.ts`、`execution-loop.test.ts`、`ui.test.ts` |
+| PM4-P1-003 | `extensions/parallel-tasks/index.ts`、`index.ts` | `runtime-modes.test.ts`（联动事件模拟） |
 
 任何 P0 需求没有实现与失败路径测试链接时不得标记完成。
+
+## v0.5 增量（并行步骤、审阅体验、parallel_tasks 联动）
+
+> 本节是对 v0.4 的增强，不改变 v0.4 的安全边界与「步骤只经受管工具推进」原则。与 v0.4 冲突处以 v0.4 为准。
+
+### 审阅面板合并（PM4-P1-001）
+
+- 审阅面板由 4 选项合并为 3 选项：**实施计划 / 继续规划（可填修改意见，可选）/ 取消计划**。
+- 「编辑计划」并入「继续规划」的可选意见输入：空意见 = 仅回到 planning 继续调研；非空意见 = 记录为 edit feedback 并让模型生成新版本。
+- 选择后必须有可见反馈：review 与 planning 的状态栏 label 区分（`PLAN · REVIEW` vs `PLAN · READ ONLY` vs `PLAN · INPUT NEEDED`），并发送可见消息说明下一步，不再只依赖 `display:false` followUp。
+
+### 步骤并行执行（PM4-P1-002）
+
+- `PlanStepDraft`/`PlanStepSpec` 增可选 `dependsOn: string[]`（引用 `S<n>` 步骤 id）。
+- 未声明 `dependsOn` 时默认依赖前一个步骤（保持串行向后兼容）；声明 `dependsOn: []` 表示无前置、可与相邻步骤并行；声明具体 id 表示需这些步骤全部 completed 后才就绪。
+- 提交时校验：引用存在、无自引用、无环；非法 → `INVALID_PLAN` fail-closed。
+- `ExecutionState` 新增 `activeStepIds?: string[]`（running 集合）；保留 `currentStepId` 作为主推进步骤以兼容审计/恢复/UI。
+- `plan_step_complete` 增可选 `stepId` 参数完成指定 running 步骤；仍是步骤权威推进的唯一入口（不违背 PM4-P0-008）。全部步骤 completed 才进入 `completed`。
+
+### parallel_tasks 进度联动（PM4-P1-003）
+
+- parallel_tasks 每个 task 增可选 `planStepId`，用于把子任务映射到计划步骤。
+- plan-mode 监听 `operations-deck:tasks` 事件，把每步骤的子任务完成数反映到计划列表步骤行（信息性反映）。
+- 步骤完成仍由模型在子任务返回后调用 `plan_step_complete(stepId)` 权威推进；**不自动推进**——子任务 finished ≠ 验收通过（可能失败或 diff 未审查落地）。
+- 事件结构漂移或 parallel-tasks 未加载时降级为仅靠 `plan_step_complete`，不报错。
 
 ## 已知限制
 

@@ -56,6 +56,8 @@ export interface PlanStepDraft {
 	readonly files?: readonly string[];
 	/** Human-readable checks or commands, not automatically executed by the controller. */
 	readonly validation?: readonly string[];
+	/** Step ids (S<n>) that must complete before this step becomes ready. Omitted = depend on the previous step; [] = no dependency. */
+	readonly dependsOn?: readonly string[];
 }
 
 export interface PlanDraft {
@@ -69,6 +71,7 @@ export interface PlanStepSpec extends PlanStepDraft {
 	readonly id: string;
 	readonly files: readonly string[];
 	readonly validation: readonly string[];
+	readonly dependsOn: readonly string[];
 }
 
 export interface PlanSpec {
@@ -147,6 +150,7 @@ export interface ExecutionState {
 	readonly approvalId?: string;
 	readonly baselineId?: string;
 	readonly currentStepId?: string;
+	readonly activeStepIds?: readonly string[];
 	readonly steps: Readonly<Record<string, StepExecutionState>>;
 	readonly pendingInput?: {
 		readonly kind: "text" | "select";

@@ -41,6 +41,7 @@ function stepChanges(before: PlanStepSpec, after: PlanStepSpec): PlanFieldChange
 		"actions",
 		"files",
 		"validation",
+		"dependsOn",
 	]);
 }
 

@@ -1,5 +1,10 @@
 import type { ExecutionState } from "./domain.ts";
 
+function activeSteps(state: ExecutionState): string {
+	const ids = state.activeStepIds ?? (state.currentStepId ? [state.currentStepId] : []);
+	return ids.length ? ids.join(", ") : "the current step";
+}
+
 export type LoopDecision =
 	| { readonly kind: "none" }
 	| { readonly kind: "queue-step"; readonly reason: string }
@@ -42,7 +47,7 @@ export class ExecutionLoop {
 		this.continuations = 0;
 		this.queued = false;
 		this.finalSummaryPending = false;
-		return this.queue("queue-step", `Implementation started at ${state.currentStepId ?? "the current step"}.`);
+		return this.queue("queue-step", `Implementation started at ${activeSteps(state)}.`);
 	}
 
 	onStepReported(state: ExecutionState): LoopDecision {
@@ -51,7 +56,7 @@ export class ExecutionLoop {
 		this.stagnantSettles = 0;
 		this.queued = false;
 		if (state.status === "implementing") {
-			return this.queue("queue-step", `Continue with ${state.currentStepId ?? "the next step"}.`);
+			return this.queue("queue-step", `Continue with ${activeSteps(state)}.`);
 		}
 		if (state.status === "completed") {
 			this.finalSummaryPending = true;
@@ -96,7 +101,7 @@ export class ExecutionLoop {
 		if (this.continuations >= this.maxContinuations) {
 			return { kind: "pause", reason: "Implementation paused after reaching the continuation safety limit" };
 		}
-		return this.queue("queue-step", `Todo ${state.currentStepId ?? "unknown"} is still active.`);
+		return this.queue("queue-step", `Todo ${activeSteps(state)} is still active.`);
 	}
 
 	reset(): void {

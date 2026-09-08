@@ -11,7 +11,7 @@
   ],
   "fullscreenScrollbar": "hidden",
   "hideThinkingBlock": false,
-  "lastChangelogVersion": "0.84.4",
+  "lastChangelogVersion": "0.85.1",
   "outputPad": 0,
   "packages": [
     "npm:@ff-labs/pi-fff",

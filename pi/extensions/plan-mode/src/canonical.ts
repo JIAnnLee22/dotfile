@@ -84,6 +84,17 @@ function normalizeFiles(values: readonly string[] | undefined): string[] {
 	return files;
 }
 
+function normalizeDependsOn(values: readonly string[] | undefined, index: number): string[] {
+	const normalized = [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+	if (normalized.length > 128) throw new TypeError(`steps[${index}].dependsOn exceeds 128 entries`);
+	for (const value of normalized) {
+		if (!/^S[1-9]\d*$/.test(value)) {
+			throw new TypeError(`steps[${index}].dependsOn must reference step ids as S<n>: ${value}`);
+		}
+	}
+	return normalized;
+}
+
 export function normalizeDraft(draft: PlanDraft): PlanDraft {
 	const goal = draft.goal.trim();
 	if (!goal) throw new TypeError("Plan goal is required");
@@ -104,20 +115,55 @@ export function normalizeDraft(draft: PlanDraft): PlanDraft {
 				actions,
 				files: normalizeFiles(step.files),
 				validation: normalizeStrings(step.validation, 256, `steps[${index}].validation`),
+				...(step.dependsOn !== undefined ? { dependsOn: normalizeDependsOn(step.dependsOn, index) } : {}),
 			};
 		}),
 		risks: normalizeStrings(draft.risks, 256, "risks"),
 	};
 }
 
+function hasDependencyCycle(steps: readonly PlanStepSpec[]): boolean {
+	const byId = new Map(steps.map((step) => [step.id, step]));
+	const visiting = new Set<string>();
+	const visited = new Set<string>();
+	const visit = (id: string): boolean => {
+		if (visiting.has(id)) return true;
+		if (visited.has(id)) return false;
+		visiting.add(id);
+		const step = byId.get(id);
+		if (step) for (const dep of step.dependsOn) if (visit(dep)) return true;
+		visiting.delete(id);
+		visited.add(id);
+		return false;
+	};
+	return steps.some((step) => visit(step.id));
+}
+
+export function validateStepDependencies(steps: readonly PlanStepSpec[]): string[] {
+	const errors: string[] = [];
+	const ids = new Set(steps.map((step) => step.id));
+	for (const step of steps) {
+		for (const dep of step.dependsOn) {
+			if (dep === step.id) errors.push(`step ${step.id} depends on itself`);
+			else if (!ids.has(dep)) errors.push(`step ${step.id} references missing dependency ${dep}`);
+		}
+	}
+	if (hasDependencyCycle(steps)) errors.push("step dependencies contain a cycle");
+	return errors;
+}
+
 export function materializeSteps(draft: PlanDraft): PlanStepSpec[] {
-	return draft.steps.map((step, index) => ({
+	const steps = draft.steps.map((step, index) => ({
 		id: `S${index + 1}`,
 		title: step.title,
 		actions: step.actions,
 		files: step.files ?? [],
 		validation: step.validation ?? [],
+		dependsOn: step.dependsOn ?? (index === 0 ? [] : [`S${index}`]),
 	}));
+	const errors = validateStepDependencies(steps);
+	if (errors.length > 0) throw new TypeError(`Invalid step dependencies: ${errors.join("; ")}`);
+	return steps;
 }
 
 export function calculatePlanHash(spec: Omit<PlanSpec, "contentHash"> | PlanSpec): string {
@@ -168,6 +214,16 @@ export function validatePlanSpec(spec: PlanSpec): string[] {
 				errors.push(error instanceof Error ? error.message : String(error));
 			}
 		}
+		if (!Array.isArray(step.dependsOn)) {
+			errors.push(`steps[${index}].dependsOn must be an array`);
+		} else {
+			for (const dep of step.dependsOn) {
+				if (typeof dep !== "string" || !/^S[1-9]\d*$/.test(dep)) errors.push(`steps[${index}].dependsOn contains an invalid reference`);
+			}
+		}
+	}
+	if (Array.isArray(spec.steps) && spec.steps.length > 0) {
+		errors.push(...validateStepDependencies(spec.steps));
 	}
 	try {
 		const expected = calculatePlanHash(spec);

@@ -114,6 +114,17 @@ function stepProjection(spec: PlanSpec): Record<string, StepExecutionState> {
 	);
 }
 
+/** Pending steps whose declared dependencies are all completed. */
+function readySteps(spec: PlanSpec, steps: Record<string, StepExecutionState>): string[] {
+	return spec.steps
+		.filter((step) => {
+			const state = steps[step.id];
+			if (!state || state.status !== "pending") return false;
+			return step.dependsOn.every((dep) => steps[dep]?.status === "completed");
+		})
+		.map((step) => step.id);
+}
+
 function isDraft(value: unknown): value is PlanDraft {
 	return value !== null && typeof value === "object" && "goal" in value && "steps" in value && Array.isArray((value as PlanDraft).steps);
 }
@@ -467,10 +478,21 @@ export class PlanController {
 			data: approval,
 		});
 		const steps = structuredClone(this.stateValue.steps) as Record<string, StepExecutionState>;
+		const running = spec.steps.filter((step) => steps[step.id]?.status === "running").map((step) => step.id);
+		const newlyReady = readySteps(spec, steps);
+		if (running.length === 0 && newlyReady.length === 0) {
+			const anyPending = spec.steps.some((step) => steps[step.id]?.status === "pending");
+			if (anyPending) {
+				throw new PlanControllerError("INVALID_PLAN", "Plan has pending steps but none are ready to start");
+			}
+			throw new PlanControllerError("INVALID_PLAN", "Plan has no incomplete step");
+		}
+		for (const stepId of newlyReady) steps[stepId] = { ...steps[stepId], status: "running" };
+		const activeStepIds = [...running, ...newlyReady];
 		const currentStepId =
-			this.stateValue.currentStepId ?? spec.steps.find((step) => steps[step.id]?.status !== "completed")?.id;
-		if (!currentStepId) throw new PlanControllerError("INVALID_PLAN", "Plan has no incomplete step");
-		steps[currentStepId] = { ...steps[currentStepId], status: "running" };
+			this.stateValue.currentStepId && activeStepIds.includes(this.stateValue.currentStepId)
+				? this.stateValue.currentStepId
+				: activeStepIds[0];
 		await this.commitState(
 			{
 				...this.stateValue,
@@ -480,8 +502,9 @@ export class PlanController {
 				approvalId: approval.approvalId,
 				baselineId: this.baselineValue.baselineId,
 				currentStepId,
+				activeStepIds,
 				steps,
-				reason: `Implementation started at ${currentStepId} with verified active tools`,
+				reason: `Implementation started at ${activeStepIds.join(", ")} with verified active tools`,
 			},
 			request.actor,
 			environment.scope,
@@ -528,10 +551,14 @@ export class PlanController {
 			throw new PlanControllerError("INVALID_STATE", "Step completion requires an implementing plan");
 		}
 		const spec = this.requireV2Spec();
+		const activeStepIds = [...(this.stateValue.activeStepIds ?? (this.stateValue.currentStepId ? [this.stateValue.currentStepId] : []))];
 		const stepId = environment.stepId ?? this.stateValue.currentStepId;
 		const step = spec.steps.find((candidate) => candidate.id === stepId);
-		if (!stepId || stepId !== this.stateValue.currentStepId || !step || !this.stateValue.steps[stepId]) {
-			throw new PlanControllerError("INVALID_ACTION", "Only the current step can be completed");
+		if (!stepId || !step || !this.stateValue.steps[stepId]) {
+			throw new PlanControllerError("INVALID_ACTION", "The reported step must exist in the plan");
+		}
+		if (!activeStepIds.includes(stepId) || this.stateValue.steps[stepId].status !== "running") {
+			throw new PlanControllerError("INVALID_ACTION", "Only an active (running) step can be completed");
 		}
 		const note = environment.note?.trim();
 		if (!note) throw new PlanControllerError("INVALID_ACTION", "A non-empty step summary is required", true);
@@ -555,9 +582,13 @@ export class PlanController {
 			reportIds: [...steps[stepId].reportIds, report.evidenceId],
 			summary: report.summary,
 		};
-		const nextStep = spec.steps.find((candidate) => steps[candidate.id]?.status !== "completed");
-		if (nextStep) steps[nextStep.id] = { ...steps[nextStep.id], status: "running" };
-		const completed = nextStep === undefined;
+		const newlyReady = readySteps(spec, steps);
+		for (const id of newlyReady) steps[id] = { ...steps[id], status: "running" };
+		const nextActive = [...activeStepIds.filter((id) => id !== stepId), ...newlyReady];
+		const completed = spec.steps.every((candidate) => steps[candidate.id]?.status === "completed");
+		if (!completed && nextActive.length === 0) {
+			throw new PlanControllerError("INVALID_PLAN", "No active steps remain but the plan is not complete");
+		}
 		await this.commitState(
 			{
 				...this.stateValue,
@@ -565,13 +596,14 @@ export class PlanController {
 				revision: this.stateValue.revision + 1,
 				stepRevision: this.stateValue.stepRevision + 1,
 				approvalId: completed ? undefined : this.stateValue.approvalId,
-				currentStepId: nextStep?.id,
+				currentStepId: completed ? undefined : nextActive[0],
+				activeStepIds: completed ? undefined : nextActive,
 				steps,
 				reason: completed ? "All plan steps reported complete" : `Step ${stepId} reported complete`,
 			},
 			request.actor,
 			environment.scope,
-			completed ? "Plan implementation complete" : `Advanced from ${stepId} to ${nextStep?.id}`,
+			completed ? "Plan implementation complete" : `Advanced from ${stepId} to ${nextActive.join(", ")}`,
 		);
 		if (completed) this.approvalValue = undefined;
 	}

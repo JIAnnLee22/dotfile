@@ -4,8 +4,7 @@ import { MANDATORY_IMPLEMENTATION_TOOLS } from "./tool-session.ts";
 
 const REVIEW_OPTIONS: ReadonlyArray<{ label: string; decision: ReviewDecision }> = [
 	{ label: "实施计划", decision: "implement" },
-	{ label: "编辑计划（填写修改意见）", decision: "edit_feedback" },
-	{ label: "继续规划", decision: "continue_planning" },
+	{ label: "继续规划（可填修改意见）", decision: "continue_planning" },
 	{ label: "取消计划", decision: "cancel" },
 ];
 
@@ -52,6 +51,19 @@ export async function chooseReviewDecision(ctx: ExtensionContext, spec: PlanSpec
 		REVIEW_OPTIONS.map((option) => option.label),
 	);
 	return REVIEW_OPTIONS.find((option) => option.label === selected)?.decision;
+}
+
+/**
+ * 继续规划的可选修改意见：undefined = 取消（留在 review），空字符串 = 纯继续规划，非空 = 修改意见。
+ */
+export async function requestContinueFeedback(ctx: ExtensionContext, spec: PlanSpec): Promise<string | undefined> {
+	if (!ctx.hasUI) return undefined;
+	const feedback = await ctx.ui.input(
+		"继续规划 — 可选修改意见",
+		"留空直接继续规划；填写修改意见则让模型生成新版本",
+	);
+	if (feedback === undefined) return undefined;
+	return feedback.trim();
 }
 
 export async function requestEditFeedback(ctx: ExtensionContext, spec: PlanSpec): Promise<string | undefined> {

@@ -8,12 +8,12 @@ import {
 	type PlanSpec,
 	type PlanStepSpec,
 } from "../src/domain.ts";
-import { buildPlanProgressLines, buildPlanProgressSummary, truncateStepTitle } from "../src/ui.ts";
+import { aggregateSubtaskProgress, buildPlanProgressLines, buildPlanProgressSummary, truncateStepTitle } from "../src/ui.ts";
 
 const steps: PlanStepSpec[] = [
-	{ id: "S1", title: "Create extension", actions: ["write"], files: ["src/"], validation: ["created"] },
-	{ id: "S2", title: "Update configuration", actions: ["edit"], files: ["settings.json"], validation: ["updated"] },
-	{ id: "S3", title: "Verify behavior", actions: ["test"], files: [], validation: ["verified"] },
+	{ id: "S1", title: "Create extension", actions: ["write"], files: ["src/"], validation: ["created"], dependsOn: [] },
+	{ id: "S2", title: "Update configuration", actions: ["edit"], files: ["settings.json"], validation: ["updated"], dependsOn: ["S1"] },
+	{ id: "S3", title: "Verify behavior", actions: ["test"], files: [], validation: ["verified"], dependsOn: ["S2"] },
 ];
 
 const spec: PlanSpec = {
@@ -92,6 +92,47 @@ test("keeps the active Todo visible when a long plan is windowed", () => {
 	);
 	assert.ok(lines?.some((line) => line.includes("#S18 Step 18")));
 	assert.ok(lines?.some((line) => line.includes("earlier steps")));
+});
+
+test("PM4-P1-002 summary and tree render multiple running steps", () => {
+	const parallel = state({
+		activeStepIds: ["S1", "S2"],
+		currentStepId: "S1",
+		steps: {
+			S1: { status: "running", reportIds: [], evidenceIds: [] },
+			S2: { status: "running", reportIds: [], evidenceIds: [] },
+			S3: { status: "pending", reportIds: [], evidenceIds: [] },
+		},
+	});
+	assert.equal(
+		buildPlanProgressSummary(spec, parallel),
+		"0/3 · ▶ S1 Create extension · ▶ S2 Update configuration · reports 1 · evidence 0",
+	);
+	assert.deepEqual(buildPlanProgressLines(spec, parallel), [
+		"Plan · implementing · 0/3 completed · 2 in progress · 1 pending",
+		"├─ ▶ #S1 Create extension",
+		"├─ ▶ #S2 Update configuration",
+		"└─ ○ #S3 Verify behavior",
+	]);
+});
+
+test("PM4-P1-003 aggregates parallel-tasks results per plan step", () => {
+	const progress = aggregateSubtaskProgress([
+		{ planStepId: "S1", status: "finished" },
+		{ planStepId: "S1", status: "running" },
+		{ planStepId: "S2", status: "finished" },
+		{ planStepId: "S3", status: "finished" },
+	]);
+	assert.deepEqual(progress.get("S1"), { total: 2, finished: 1 });
+	assert.deepEqual(progress.get("S2"), { total: 1, finished: 1 });
+	assert.equal(progress.has("S9"), false);
+	assert.equal(aggregateSubtaskProgress(undefined).size, 0);
+});
+
+test("PM4-P1-003 tree shows subtask progress next to the mapped step", () => {
+	const progress = new Map([["S2", { total: 3, finished: 2 }]]);
+	const lines = buildPlanProgressLines(spec, state(), 12, progress);
+	assert.ok(lines?.some((line) => line.includes("#S2 Update configuration [2/3 子任务]")), lines?.join("\n"));
 });
 
 test("caps long step titles before terminal-width truncation", () => {

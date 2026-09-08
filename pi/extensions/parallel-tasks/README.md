@@ -5,7 +5,7 @@
 子任务分两类：
 
 - **只读角色**（`probe` / `analyst` / `verifier` / `reviewer`）：在仓库中调研、定位、核验、审查，不改文件。
-- **写角色**（`implementer`）：在**隔离的 git worktree** 中写代码、跑测试，产出 diff 交回主会话审查合并。
+- **写角色**（`implementer`）：在**隔离沙箱**（git 仓库用 worktree，非 git 目录用副本）中写代码、跑测试，产出 diff 交回主会话审查合并；沙箱保留到验收后，用 `/parallel-cleanup` 清理。
 
 ## 使用方式
 
@@ -52,13 +52,14 @@
 - 每个任务运行在单独的 pi 子进程中，有独立上下文，不会共享其他子任务的对话。
 - 子任务禁用自动扩展发现，避免递归调用 `parallel_tasks`。
 - 只读角色：`write` / `edit` 被禁用并由 `readonly-guard.ts` 再次拦截；`bash` 用只读命令白名单，拒绝重定向、管道、命令拼接、解释器与写入类命令。
-- `implementer` 角色：运行在 `git worktree add --detach <tmp> HEAD` 创建的隔离目录中，与主仓库和其他并行任务文件级隔离；`write-guard.ts` 拦截越出 worktree 的写入、危险命令（rm -rf 根目录、dd、sudo、curl/wget、远程 git 等）。主仓库的未提交改动不会进入 worktree。
+- `implementer` 角色：git 仓库运行在 `git worktree add --detach` 创建的隔离目录中（基于 HEAD，不含未提交改动）；非 git 仓库退化为目录副本（基于当前工作区快照）。两者都与主仓库和其他并行任务文件级隔离；`write-guard.ts` 拦截越出沙箱的写入、危险命令（rm -rf 根目录、dd、sudo、curl/wget、远程 git 等）。
+- 沙箱在子任务结束后保留，不会自动删除；主会话审查并用 `git apply`（或逐文件）落地、验证通过后，执行 `/parallel-cleanup`（或手动 `git worktree remove` / 删除副本目录）释放。
 - 子任务不会直接改主仓库；`implementer` 的改动以 diff 形式返回，由主会话审查后用 `git apply`（或逐文件）落地。
 - 最多 8 个任务，最多同时运行 4 个。
 
 ## 结果整合
 
-返回内容包含每个任务的状态、任务描述、最终结论、工具统计，`implementer` 还附带 diff 与改动文件列表，并附整合要求。主会话需要合并共识、标记矛盾、保留证据不足项、审查并应用 diff，然后再落地文件修改。
+返回内容包含每个任务的状态、任务描述、最终结论、工具统计，`implementer` 还附带 diff、改动文件列表与沙箱路径，并附整合要求。主会话需要合并共识、标记矛盾、保留证据不足项、审查并应用 diff，然后再落地文件修改，最后用 `/parallel-cleanup` 释放沙箱。
 
 ## 不适用场景
 

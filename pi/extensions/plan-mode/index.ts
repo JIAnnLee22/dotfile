@@ -27,10 +27,10 @@ import {
 import { ExecutionLoop, type LoopDecision } from "./src/execution-loop.ts";
 import { AUDIT_ENTRY_TYPE } from "./src/journal.ts";
 import { evaluateToolCall } from "./src/policy.ts";
-import { chooseReviewDecision, confirmImplementation, renderUserPlan, requestEditFeedback } from "./src/review-ui.ts";
+import { chooseReviewDecision, confirmImplementation, renderUserPlan, requestContinueFeedback, requestEditFeedback } from "./src/review-ui.ts";
 import { usesPlanningPolicy } from "./src/state-machine.ts";
 import { MANDATORY_IMPLEMENTATION_TOOLS, PLAN_MANAGED_TOOLS, ToolSession } from "./src/tool-session.ts";
-import { buildPlanProgressLines } from "./src/ui.ts";
+import { aggregateSubtaskProgress, buildPlanProgressLines, type SubtaskProgress } from "./src/ui.ts";
 
 const CONTEXT_TYPE = "plan-mode/context-v2";
 const RESULT_TYPE = "plan-mode/action-result-v2";
@@ -158,6 +158,8 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	let configNoticeShown = false;
 	let deckControlsWidget = false;
 	let deckModeListener: (() => void) | undefined;
+	let subtaskProgress = new Map<string, SubtaskProgress>();
+	let subtaskProgressUnsubscribe: (() => void) | undefined;
 
 	pi.registerFlag("plan", { description: "Start in Plan Mode v2", type: "boolean", default: false });
 	pi.registerFlag("plan-action", { description: "Non-interactive Plan Mode v2 action", type: "string" });
@@ -167,6 +169,11 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	pi.registerFlag("plan-hash", { description: "Expected immutable plan content hash", type: "string" });
 	pi.registerFlag("plan-from-version", { description: "Source version for --plan-action diff", type: "string" });
 	pi.registerFlag("plan-to-version", { description: "Target version for --plan-action diff", type: "string" });
+
+	subtaskProgressUnsubscribe = pi.events.on("operations-deck:tasks", (data) => {
+		const details = data as { results?: Array<{ planStepId?: string; status?: string }> } | undefined;
+		subtaskProgress = aggregateSubtaskProgress(details?.results);
+	});
 
 	function ensureController(ctx: ExtensionContext): PlanController {
 		if (controller) return controller;
@@ -230,13 +237,17 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			return;
 		}
 		const color = state.status === "implementing" ? "accent" : state.status === "failed" || state.status === "stale" ? "error" : "warning";
-		const label = state.status === "planning" || state.status === "awaiting_input" || state.status === "review"
+		const label = state.status === "planning"
 			? "PLAN · READ ONLY"
-			: state.status === "implementing"
-				? "PLAN · IMPLEMENTING"
-				: `PLAN · ${state.status.toUpperCase()}`;
+			: state.status === "awaiting_input"
+				? "PLAN · INPUT NEEDED"
+				: state.status === "review"
+					? "PLAN · REVIEW"
+					: state.status === "implementing"
+						? "PLAN · IMPLEMENTING"
+						: `PLAN · ${state.status.toUpperCase()}`;
 		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg(color, label));
-		const lines = buildPlanProgressLines(current.spec, state);
+		const lines = buildPlanProgressLines(current.spec, state, 12, subtaskProgress);
 		if (!lines) {
 			ctx.ui.setWidget("plan-mode", undefined);
 		} else {
@@ -276,10 +287,14 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		if (decision.kind !== "queue-step" && decision.kind !== "queue-final") return;
 		const current = ensureController(ctx);
 		const state = current.state;
-		const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const activeStepIds = state.activeStepIds ?? (state.currentStepId ? [state.currentStepId] : []);
+		const activeSpecs = activeStepIds
+			.map((id) => current.spec?.steps.find((candidate) => candidate.id === id))
+			.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined);
+		const stepList = activeSpecs.map((step) => `${step.id}: ${step.title}`).join("; ");
 		const content = decision.kind === "queue-final"
 			? `${decision.reason}\nGive the user a concise final result: changed files, validation performed, deviations, and remaining risks. Do not call ${COMPLETE_TOOL} again.`
-			: `${decision.reason}\nContinue the approved plan from the current step${step ? ` ${step.id}: ${step.title}` : ""}. Ordinary tools now use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when the step is done; call ${BLOCK_TOOL} for a real blocker.`;
+			: `${decision.reason}\nContinue the approved plan${stepList ? ` from ${stepList}` : ""}. Ordinary tools now use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when a step is done${activeSpecs.length > 1 ? " (pass stepId for the specific step)" : ""}; call ${BLOCK_TOOL} for a real blocker.`;
 		pi.sendMessage({ customType: "plan-mode/continue-v2", content, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 	}
 
@@ -427,16 +442,27 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		switch (decision) {
 			case "implement":
 				return startImplementation(ctx, current.state.planRef!, actorFor(ctx));
-			case "edit_feedback":
-				return editPlan(ctx);
 			case "continue_planning": {
-				const result = await dispatch(ctx, "continue_planning");
+				const feedback = await requestContinueFeedback(ctx, current.spec);
+				if (feedback === undefined) return submitted;
+				const result = feedback
+					? await dispatch(ctx, "edit_feedback", { feedback })
+					: await dispatch(ctx, "continue_planning");
 				if (result.ok) {
 					toolSession.applyPlanning(managedToolsForStatus("planning"));
-					pi.sendMessage(
-						{ customType: "plan-mode/continue-planning-v2", content: "Continue read-only research and submit a new plan version when ready.", display: false },
-						{ triggerTurn: true, deliverAs: "followUp" },
-					);
+					if (feedback) {
+						emitMessage(ctx, "plan-mode/planning-feedback-v2", "修改意见已记录，模型将生成新的计划版本。", { feedback });
+						pi.sendMessage(
+							{ customType: "plan-mode/continue-planning-v2", content: `Revise the structured plan using this feedback:\n${feedback}`, display: false },
+							{ triggerTurn: true, deliverAs: "followUp" },
+						);
+					} else {
+						emitMessage(ctx, "plan-mode/planning-resumed-v2", "已回到规划模式，可继续调研并提交新版本。");
+						pi.sendMessage(
+							{ customType: "plan-mode/continue-planning-v2", content: "Continue read-only research and submit a new plan version when ready.", display: false },
+							{ triggerTurn: true, deliverAs: "followUp" },
+						);
+					}
 				}
 				updateUI(ctx);
 				return result;
@@ -447,6 +473,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 				return result;
 			}
 		}
+		return submitted;
 	}
 
 	async function exactRefForInteractive(ctx: ExtensionContext, resume: boolean): Promise<PlanRef | undefined> {
@@ -643,16 +670,20 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 
 	pi.registerTool({
 		name: COMPLETE_TOOL,
-		label: "Report current plan step complete",
-		description: "Report the current step complete with a concise summary. Tool evidence is recorded for audit but is not a completion gate.",
+		label: "Report a plan step complete",
+		description: "Report an active (running) plan step complete with a concise summary. Use stepId to complete a specific parallel step. Tool evidence is recorded for audit but is not a completion gate.",
 		promptGuidelines: [
-			"Call plan_step_complete after finishing the current step and its validation.",
+			"Call plan_step_complete after finishing a running step and its validation.",
+			"When parallel steps are running, pass stepId to report the specific step.",
 			"Use plan_blocked instead when implementation genuinely cannot continue.",
 		],
-		parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }),
+		parameters: Type.Object({
+			summary: Type.String({ minLength: 1, maxLength: 4096 }),
+			stepId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
-			const result = await dispatch(ctx, "complete_step", { note: params.summary }, undefined, modelActor);
+			const result = await dispatch(ctx, "complete_step", { note: params.summary, stepId: params.stepId }, undefined, modelActor);
 			if (!result.ok) throw new Error(formatResult(result));
 			if (result.state.status === "stale") {
 				return { content: [{ type: "text", text: `${formatResult(result)}\nReport recorded only; stale plan progress did not advance.` }], details: result, terminate: true };
@@ -660,7 +691,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			queueDecision(ctx, loop.onStepReported(result.state));
 			updateUI(ctx);
 			return {
-				content: [{ type: "text", text: result.state.status === "completed" ? "All steps reported complete; final summary queued." : `Step reported complete; continuing with ${result.state.currentStepId}.` }],
+				content: [{ type: "text", text: result.state.status === "completed" ? "All steps reported complete; final summary queued." : `Step reported complete; continuing with ${(result.state.activeStepIds ?? []).join(", ") || result.state.currentStepId}.` }],
 				details: result,
 				terminate: true,
 			};
@@ -799,7 +830,9 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 				customType !== CONTEXT_TYPE &&
 				customType !== "plan-mode/review-v2" &&
 				customType !== "plan-mode/continue-v2" &&
-				customType !== "plan-mode/continue-planning-v2"
+				customType !== "plan-mode/continue-planning-v2" &&
+				customType !== "plan-mode/planning-feedback-v2" &&
+				customType !== "plan-mode/planning-resumed-v2"
 			);
 		}),
 	}));
@@ -816,15 +849,21 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		const state = current.state;
 		if (state.status === "inactive") return;
 		const spec = current.spec;
-		const step = spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const activeStepIds = state.activeStepIds ?? (state.currentStepId ? [state.currentStepId] : []);
+		const activeSpecs = activeStepIds
+			.map((id) => spec?.steps.find((candidate) => candidate.id === id))
+			.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined);
+		const activeInstructions = activeSpecs
+			.map((step) => `Implement ${step.id}: ${step.title}. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}.`)
+			.join("\n");
 		const content = state.status === "planning"
 			? "Plan read-only. Use only source-verified research tools. Ask material questions with plan_question. Submit goal, decisions, steps(title/actions/files/validation), and risks with plan_submit. Do not declare capability/path grants."
 			: state.status === "awaiting_input"
 				? `Wait for clarification: ${state.pendingInput?.prompt ?? "input required"}`
 				: state.status === "review"
 					? "The plan is awaiting an explicit review decision. Do not implement or self-approve."
-					: state.status === "implementing" && step
-						? `Implement ${step.id}: ${step.title}. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}. Ordinary tools use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when done, or ${BLOCK_TOOL} for a real blocker.`
+					: state.status === "implementing" && activeSpecs.length
+						? `${activeInstructions}\nOrdinary tools use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when a step is done${activeSpecs.length > 1 ? " (pass stepId for the specific step)" : ""}, or ${BLOCK_TOOL} for a real blocker.`
 						: state.status === "completed"
 							? "All steps are complete. Give the final changed-files, validation, deviations, and risks summary now."
 							: state.status === "paused"
@@ -979,5 +1018,8 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		deckModeListener?.();
 		deckModeListener = undefined;
 		deckControlsWidget = false;
+		subtaskProgressUnsubscribe?.();
+		subtaskProgressUnsubscribe = undefined;
+		subtaskProgress.clear();
 	});
 }
