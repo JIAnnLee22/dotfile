@@ -84,36 +84,3 @@ test("PM4-P0 v2 validation reports duplicate ids, bad files and imported/forked 
 	);
 	assert.ok(both.some((error) => error.includes("cannot contain both importedFrom and forkedFrom")));
 });
-
-test("PM4-P1-002 dependsOn defaults to serial and materializes explicit dependencies", () => {
-	const serial = materializeSteps(normalizeDraft(draft));
-	assert.deepEqual(serial[0].dependsOn, []);
-	assert.deepEqual(serial[1].dependsOn, ["S1"]);
-
-	const parallel = normalizeDraft({
-		...draft,
-		steps: [{ ...draft.steps[0], dependsOn: [] }, { ...draft.steps[1], dependsOn: [] }],
-	});
-	assert.deepEqual(materializeSteps(parallel)[1].dependsOn, []);
-});
-
-test("PM4-P1-002 rejects self-reference, missing reference and cycles", () => {
-	const selfRef = { ...draft, steps: [{ ...draft.steps[0] }, { ...draft.steps[1], dependsOn: ["S2"] }] };
-	assert.throws(() => materializeSteps(normalizeDraft(selfRef)), /depends on itself/);
-
-	const missing = { ...draft, steps: [{ ...draft.steps[0] }, { ...draft.steps[1], dependsOn: ["S99"] }] };
-	assert.throws(() => materializeSteps(normalizeDraft(missing)), /missing dependency/);
-
-	const cycle = {
-		...draft,
-		steps: [{ ...draft.steps[0], dependsOn: ["S2"] }, { ...draft.steps[1], dependsOn: ["S1"] }],
-	};
-	assert.throws(() => materializeSteps(normalizeDraft(cycle)), /cycle/);
-});
-
-test("PM4-P1-002 validation reports bad dependsOn on a stored spec", () => {
-	const steps = [...buildSpec().steps];
-	steps[1] = { ...steps[1], dependsOn: ["S99"] };
-	const errors = validatePlanSpec(buildSpec({ steps }));
-	assert.ok(errors.some((error) => error.includes("missing dependency")), errors.join("\n"));
-});

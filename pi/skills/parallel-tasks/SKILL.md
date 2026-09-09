@@ -11,7 +11,7 @@ description: 何时把工作拆成并行子任务（parallel_tasks 工具），�
 它有两种子任务：
 
 - **只读角色**（`probe` / `analyst` / `verifier` / `reviewer`）：在仓库中调研、定位、核验、审查，不修改任何文件。
-- **写角色**（`implementer`）：在**隔离沙箱**（git 仓库用 worktree，非 git 目录用副本）中写代码、跑测试，产出 diff 交给你审查后合并。
+- **写角色**（`implementer`）：在**隔离的 git worktree** 中写代码、跑测试，产出 diff 交给你审查后合并。
 
 ## 什么时候用
 
@@ -46,10 +46,10 @@ description: 何时把工作拆成并行子任务（parallel_tasks 工具），�
 | `analyst` | 只读 | 机制分析：读懂某个流程如何工作 | 带证据的机制说明 |
 | `verifier` | 只读 | 假设核验：判定一个具体假设是否成立 | 成立 / 不成立 / 证据不足 |
 | `reviewer` | 只读 | 代码审查：找出缺陷、风险、改进点 | 分档审查意见 |
-| `implementer` | 写 | 独立实现：在隔离沙箱（worktree 或目录副本）中写代码、跑测试 | 结论 + diff |
+| `implementer` | 写 | 独立实现：在隔离 worktree 中写代码、跑测试 | 结论 + diff |
 
 只读角色只能使用 `read`/`grep`/`find`/`ls`/受白名单限制的 `bash`；`implementer` 额外有 `write`/`edit`，
-并运行在隔离沙箱（git worktree 或目录副本）中，bash 有危险命令黑名单和越界写入拦截。
+并运行在隔离的 git worktree 中，bash 有危险命令黑名单和越界写入拦截。
 
 ## 怎么写子任务描述
 
@@ -83,8 +83,7 @@ task: 分析 src/core/session-manager.ts 中 session 条目的持久化流程：
 2. **处理冲突**——结论矛盾时以有 `路径:行号` 证据的一方为准；无法判定就明确告诉用户存在分歧，不要静默挑一个。
 3. **保留存疑项**——子任务标注的「存疑 / 证据不足 / 风险」不要在整合时丢掉。
 4. **落地只读结论**——只读子任务不改文件，需要动手改代码时由你在当前会话执行。
-5. **审查并应用 diff**——`implementer` 子任务返回的是基于基线（git HEAD 或副本快照）的 diff，尚未落到当前工作区；审查无误后用 `git apply`（或逐文件 edit/write）应用到当前工作区，然后跑测试。多个写任务若改同一文件，先手工消解冲突再应用。
-6. **验收后清理沙箱**——implementer 的沙箱（git worktree 或目录副本）在子任务结束后保留，落地并验证通过后执行 `/parallel-cleanup`（或手动 `git worktree remove --force <dir>` / 删除副本目录）释放；不要在工作区改动未验证前清理。
+5. **审查并应用 diff**——`implementer` 子任务返回的是基于 HEAD 的 diff，尚未落到当前工作区；审查无误后用 `git apply`（或逐文件 edit/write）应用到当前工作区，然后跑测试。多个写任务若改同一文件，先手工消解冲突再应用。
 
 ## 相关命令
 

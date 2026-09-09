@@ -1,5 +1,18 @@
 -- lsp: 统一启用 + 补全 + 诊断
--- 修复：1) completeopt 缺 menuone/popup 2) kotlin_language_server storagePath 启动期求值 3) jdtls 需要 java>=21 4) Android 项目推荐 kotlin_lsp
+-- Kotlin/Android 仅使用 JetBrains 官方 kotlin_lsp；Java 使用 jdtls（Java >=21）。
+
+-- Definition locations may point into Gradle source JARs. The Android helper
+-- extracts a matching *-sources.jar into Neovim's cache before opening it.
+local function goto_definition()
+  if vim.tbl_contains({ 'kotlin', 'java', 'xml' }, vim.bo.filetype) then
+    local ok, dependency = pcall(require, 'android.dependency')
+    if ok then
+      dependency.definition()
+      return
+    end
+  end
+  vim.lsp.buf.definition()
+end
 
 -- 补全选项：menuone 单候选也弹菜单，popup 显示文档，noselect 不自动选中
 vim.o.completeopt = 'menu,menuone,noselect,popup,fuzzy'
@@ -35,25 +48,21 @@ else
   }
 end
 
--- 将 capabilities 注入所有启用的 server（nvim 0.11+ 的 vim.lsp.config）
+-- 将 capabilities 注入所有启用的 server（nvim 0.11+ 的 vim.lsp.config）。
+-- vim.lsp.config is a setter/callable object, not a portable getter; always
+-- use its merge form so this works on both supported Neovim versions.
 local function inject_caps(name)
-  local ok, cfg = pcall(vim.lsp.config, name)
-  if ok and cfg and capabilities then
-    vim.lsp.config(name, { capabilities = capabilities })
-  elseif capabilities then
-    -- 若 config 尚未加载，先设全局再由 enable 时合并
-    pcall(vim.lsp.config, name, { capabilities = capabilities })
+  if not capabilities then return end
+  local ok, err = pcall(vim.lsp.config, name, { capabilities = capabilities })
+  if not ok then
+    vim.notify('Unable to configure LSP ' .. name .. ': ' .. tostring(err), vim.log.levels.WARN)
   end
 end
 
 for _, srv in ipairs({ 'lua_ls', 'tsgo', 'clangd', 'jdtls', 'kotlin_lsp' }) do
   inject_caps(srv)
 end
--- 可选：保留 kotlin_language_server 供纯 Kotlin 非 Android 项目手动启用
--- inject_caps('kotlin_language_server')
-
--- 启用 servers：Android 项目用 kotlin_lsp (intellij-server)，jdtls 仅对 java 生效
--- 注意：kotlin_language_server 与 kotlin_lsp 同 filetype=kotlin 会双开，故默认只启 kotlin_lsp
+-- 启用 servers：Kotlin/Android 仅用官方 kotlin_lsp，jdtls 仅对 java 生效
 vim.lsp.enable({ 'lua_ls', 'tsgo', 'clangd', 'jdtls', 'kotlin_lsp' })
 
 vim.diagnostic.config({
@@ -86,7 +95,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
       vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, silent = true, desc = desc })
     end
     map('n', 'K', vim.lsp.buf.hover, 'LSP hover')
-    map('n', 'gD', vim.lsp.buf.definition, 'LSP definition')
+    map('n', 'gD', goto_definition, 'LSP definition')
     map('n', 'gr', vim.lsp.buf.references, 'LSP references')
     map('n', 'gi', vim.lsp.buf.implementation, 'LSP implementation')
     map('n', '<leader>rn', vim.lsp.buf.rename, 'LSP rename')
@@ -107,3 +116,21 @@ vim.api.nvim_create_user_command('LspCapabilitiesInfo', function()
   local caps = capabilities and 'blink.cmp' or 'native'
   vim.notify('LSP capabilities source: ' .. caps .. '\nServers: lua_ls, tsgo, clangd, jdtls(+java21), kotlin_lsp(intellij-server)', vim.log.levels.INFO)
 end, { desc = 'Show LSP completion source' })
+
+vim.api.nvim_create_user_command('JavaLspInfo', function()
+  local clients = vim.lsp.get_clients({ bufnr = 0, name = 'jdtls' })
+  if #clients == 0 then
+    vim.notify('jdtls is not attached to this buffer', vim.log.levels.WARN)
+    return
+  end
+  local client = clients[1]
+  local command = type(client.config.cmd) == 'table' and client.config.cmd[1] or 'managed by jdtls'
+  local lines = {
+    'root: ' .. (client.config.root_dir or 'unknown'),
+    'server: ' .. (client.config.name or 'jdtls'),
+    'command: ' .. (command or 'managed by jdtls'),
+    'completion: ' .. (client:supports_method('textDocument/completion') and 'yes' or 'no'),
+  }
+  print(table.concat(lines, '\n'))
+  vim.notify(table.concat(lines, '\n'), vim.log.levels.INFO)
+end, { desc = 'Show Java jdtls status' })

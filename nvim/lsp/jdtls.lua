@@ -10,41 +10,38 @@ local function get_jdtls_jvm_args()
   local env = os.getenv('JDTLS_JVM_ARGS')
   local args = {}
   for a in string.gmatch((env or ''), '%S+') do
-    local arg = string.format('--jvm-arg=%s', a)
-    table.insert(args, arg)
+    table.insert(args, string.format('--jvm-arg=%s', a))
   end
-  return unpack(args)
+  return args
+end
+
+local function java_major(java_exec)
+  if not java_exec or java_exec == '' or vim.fn.executable(java_exec) ~= 1 then
+    return 0
+  end
+  local output = vim.fn.system({ java_exec, '-version' })
+  local major = output:match('version [%\"](%d+)[%.\"]')
+    or output:match('[\"](%d+)[%.\"]')
+  return tonumber(major) or 0
 end
 
 local function find_java_executable()
-  -- 1) vim.g.java_home / JAVA_HOME
-  local g_home = vim.g.java_home or os.getenv('JAVA_HOME')
-  if g_home and g_home ~= '' then
-    local cand = g_home:gsub('/+$', '') .. '/bin/java'
-    if vim.fn.executable(cand) == 1 then return cand end
-  end
-  -- 2) 常见 jvm 安装位按版本降序探测 (需要 >=21)
-  local candidates = {
-    '/usr/lib/jvm/java-21-openjdk/bin/java',
-    '/usr/lib/jvm/java-26-openjdk/bin/java',
-    '/usr/lib/jvm/default-runtime/bin/java',
-    '/usr/lib/jvm/java-17-openjdk/bin/java',
-    '/usr/lib/jvm/java-11-openjdk/bin/java',
-  }
-  for _, p in ipairs(candidates) do
-    if vim.fn.executable(p) == 1 then
-      local ver_out = vim.fn.system({ p, '-version' })
-      -- java -version 输出到 stderr，system 会合并；检查 >=21
-      local major = ver_out:match('\"(%d+)%.') or ver_out:match('\"(%d+)\"') or ver_out:match('version \"(%d+)')
-      major = tonumber(major) or 0
-      -- Java 9+ 版本号为 9,11,17,21...；8 以前为 1.8
-      if major >= 21 then return p end
+  -- NixOS exposes the selected JDK through JAVA_HOME and PATH. Do not guess
+  -- mutable /usr/lib JVM paths, which are not present on NixOS.
+  local homes = { vim.g.java_home, os.getenv('JAVA_HOME') }
+  for _, home in ipairs(homes) do
+    if home and home ~= '' then
+      local candidate = home:gsub('/+$', '') .. '/bin/java'
+      if java_major(candidate) >= 21 then return candidate end
     end
   end
-  -- 3) 回落到 PATH 中的 java，若版本足够则用，否则仍返回它让 jdtls 报错提示
+
   local path_java = vim.fn.exepath('java')
-  if path_java ~= '' then return path_java end
-  return 'java'
+  if java_major(path_java) >= 21 then return path_java end
+
+  -- Let the Nix wrapper choose its own Java 21 runtime when no valid
+  -- user-selected executable is available. Do not pass an older JVM.
+  return nil
 end
 
 local root_markers1 = {
@@ -52,7 +49,6 @@ local root_markers1 = {
   'gradlew',
   'settings.gradle',
   'settings.gradle.kts',
-  '.git',
 }
 local root_markers2 = {
   'build.xml',
@@ -69,15 +65,21 @@ return {
     local workspace_dir = get_jdtls_workspace_dir()
     local data_dir = workspace_dir
     if config.root_dir then
-      data_dir = data_dir .. '/' .. vim.fn.fnamemodify(config.root_dir, ':p:h:t')
+      -- The basename alone collides for projects with the same parent name;
+      -- include a stable hash so each Gradle workspace gets its own metadata.
+      local project_name = vim.fn.fnamemodify(config.root_dir, ':p:t')
+      local project_id = vim.fn.sha256(config.root_dir):sub(1, 12)
+      data_dir = data_dir .. '/' .. project_name .. '-' .. project_id
     end
     local java_exec = find_java_executable()
-    local config_cmd = {
-      'jdtls',
-      '--java-executable', java_exec,
-      '-data', data_dir,
-      get_jdtls_jvm_args(),
-    }
+    local config_cmd = { 'jdtls' }
+    if java_exec then
+      table.insert(config_cmd, '--java-executable')
+      table.insert(config_cmd, java_exec)
+    end
+    table.insert(config_cmd, '-data')
+    table.insert(config_cmd, data_dir)
+    vim.list_extend(config_cmd, get_jdtls_jvm_args())
     return vim.lsp.rpc.start(config_cmd, dispatchers, {
       cwd = config.cmd_cwd,
       env = config.cmd_env,
@@ -85,7 +87,24 @@ return {
     })
   end,
   filetypes = { 'java' },
-  root_markers = vim.fn.has('nvim-0.11.3') == 1 and { root_markers1, root_markers2 }
+  workspace_required = true,
+  root_markers = vim.fn.has('nvim-0.12') == 1 and { root_markers1, root_markers2 }
     or vim.list_extend(root_markers1, root_markers2),
-  init_options = {},
+  settings = {
+    java = {
+      eclipse = { downloadSources = true },
+      maven = { downloadSources = true },
+      references = { includeDecompiledSources = true },
+      import = {
+        gradle = { enabled = true },
+        maven = { enabled = true },
+      },
+      configuration = { updateBuildConfiguration = 'automatic' },
+    },
+  },
+  init_options = {
+    extendedClientCapabilities = {
+      classFileContentsSupport = true,
+    },
+  },
 }

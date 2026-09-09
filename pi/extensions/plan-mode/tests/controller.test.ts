@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import test from "node:test";
-import type { PlanDraft } from "../src/domain.ts";
 import { activeToolsDigest } from "../src/tool-session.ts";
 import {
 	actor,
@@ -16,17 +15,6 @@ import {
 	start,
 	submit,
 } from "./helpers.ts";
-
-const parallelDraft: PlanDraft = {
-	goal: "Parallel plan",
-	decisions: [],
-	steps: [
-		{ title: "A", actions: ["a"], files: [], validation: [], dependsOn: [] },
-		{ title: "B", actions: ["b"], files: [], validation: [], dependsOn: [] },
-		{ title: "C", actions: ["c"], files: [], validation: [], dependsOn: ["S1", "S2"] },
-	],
-	risks: [],
-};
 
 test("PM4-P0-001 baseline is audited before planning state", async () => {
 	const f = await fixture();
@@ -205,62 +193,6 @@ test("PM4-P0-010 terminal archive returns to inactive", async () => {
 		assert.equal(f.controller.state.status, "inactive");
 		assert.equal(f.controller.spec, undefined);
 		assert.equal(f.controller.baseline, undefined);
-	} finally {
-		await f.cleanup();
-	}
-});
-
-test("PM4-P1-002 parallel steps activate all ready steps and advance per dependency", async () => {
-	const f = await fixture();
-	try {
-		const ref = await prepareReview(f.controller, f.scope, parallelDraft);
-		const running = await f.controller.dispatch(request("implement", ref), implementationEnvironment(f.scope));
-		assert.equal(running.ok, true);
-		assert.deepEqual(running.state.activeStepIds, ["S1", "S2"]);
-		assert.equal(running.state.steps.S1.status, "running");
-		assert.equal(running.state.steps.S2.status, "running");
-		assert.equal(running.state.steps.S3.status, "pending");
-
-		const done1 = await f.controller.dispatch(
-			request("complete_step", undefined, modelActor),
-			environment(f.scope, { stepId: "S1", note: "A done" }),
-		);
-		assert.equal(done1.ok, true);
-		assert.equal(done1.state.status, "implementing");
-		assert.equal(done1.state.steps.S1.status, "completed");
-		assert.deepEqual(done1.state.activeStepIds, ["S2"]);
-		assert.equal(done1.state.steps.S3.status, "pending");
-
-		const done2 = await f.controller.dispatch(
-			request("complete_step", undefined, modelActor),
-			environment(f.scope, { stepId: "S2", note: "B done" }),
-		);
-		assert.equal(done2.ok, true);
-		assert.deepEqual(done2.state.activeStepIds, ["S3"]);
-		assert.equal(done2.state.steps.S3.status, "running");
-
-		const done3 = await f.controller.dispatch(
-			request("complete_step", undefined, modelActor),
-			environment(f.scope, { stepId: "S3", note: "C done" }),
-		);
-		assert.equal(done3.ok, true);
-		assert.equal(done3.state.status, "completed");
-		assert.deepEqual(done3.state.activeStepIds, undefined);
-	} finally {
-		await f.cleanup();
-	}
-});
-
-test("PM4-P1-002 completing a non-running step is rejected", async () => {
-	const f = await fixture();
-	try {
-		const ref = await prepareReview(f.controller, f.scope, parallelDraft);
-		await f.controller.dispatch(request("implement", ref), implementationEnvironment(f.scope));
-		const bad = await f.controller.dispatch(
-			request("complete_step", undefined, modelActor),
-			environment(f.scope, { stepId: "S3", note: "not ready" }),
-		);
-		assert.equal(bad.error?.code, "INVALID_ACTION");
 	} finally {
 		await f.cleanup();
 	}

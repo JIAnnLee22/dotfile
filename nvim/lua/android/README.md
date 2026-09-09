@@ -1,6 +1,6 @@
 # android.nvim — Neovim Android 跳转插件
 
-为纯 Neovim（无 Android Studio）提供两类跳转，补足 `jdtls` / `kotlin-language-server` 不覆盖的能力：
+为纯 Neovim（无 Android Studio）提供两类跳转，补足 `jdtls` / JetBrains 官方 `kotlin-lsp` 不覆盖的能力：
 
 1. **SDK 源码跳转**：在 Kotlin/Java 中对 `android.*` / `androidx.*` / `java.*` 类名按 `gd` 直接跳到 `$SDK/sources/android-XX/.../*.java`。
 2. **XML ↔ 代码资源跳转**：`@string/@color/@drawable/@layout/@id/@mipmap/@xml/@style` 与 `R.layout.xxx / R.string.xxx` 互跳，`AndroidManifest.xml` 的 `@string/@mipmap/@style`、`tools:context=".MainActivity"`、自定义 `<com.example.View>`、`<TextView>` 等 widget 标签跳 SDK/项目源码。
@@ -64,29 +64,36 @@ require("android").setup({
 
 ## SDK 解析细节
 
-1. `get_sdk_dir` 优先级：`vim.g.android_sdk_dir` > `$ANDROID_HOME` > `$ANDROID_SDK_ROOT` > `local.properties:sdk.dir` > `~/Android/Sdk` > `~/Android/sdk` > `~/Library/Android/sdk`。
+1. `get_sdk_dir` 优先级：`vim.g.android_sdk_dir` > `local.properties:sdk.dir` > `$ANDROID_HOME`/`$ANDROID_SDK_ROOT`/`$ANDROID_SDK_HOME` > `~/Android/Sdk` > `~/Android/sdk` > `~/Library/Android/sdk`。项目的 `local.properties` 优先于全局环境变量。
 2. `get_compile_sdk` 正则同时捕获 `minorApiLevel`，`36 + 1 → "36.1"`。
 3. `get_sources_root` 只认含 `android/` 子目录的有效 `sources/android-*`，`android-36` 这种空壳（仅 `.installer`）会被跳过，自动选 `android-36.1`。
 4. `sdk.find_sdk_source` 先 `import` 表 → `COMMON_PREFIXES` 探测 → `XML_TAG_MAP` → `rg "class Foo"`。
+5. Kotlin LSP 的 definition 若返回 Gradle `jar:file:...!/path`，`android.dependency` 会在 `~/.cache/nvim/android-lsp-sources/` 解包同版本的 `*-sources.jar` 并打开源码；只有二进制 JAR 时会提示下载源码包，不进行反编译。Java jdtls 的 `jdt://` 虚拟 URI 不由该模块伪造为普通文件。
 
 ## 依赖
 
 - Neovim 0.11+（`vim.lsp.enable` / `vim.fs.find`）
 - `rg` 强烈建议（无则部分回落到 `readfile` 仍可工作）
 - 已安装 SDK `sources`（`sdkmanager --install "sources;android-36"`）
+- Gradle 依赖源码跳转需要对应的 `*-sources.jar`；没有源码包时不会伪造或反编译代码
+- `unzip`（当前 NixOS CLI 配置已提供）
 
 ## 调试
 
 ```
 :AndroidInfo
+:checkhealth vim.lsp
+:lua print(vim.lsp.get_clients({ bufnr = 0 })[1] and vim.lsp.get_clients({ bufnr = 0 })[1].name)
 :lua print(require("android.sdk").find_sdk_source("android.view.View"))
 :lua print(require("android.resources").find_resource_file("string","app_name"))
 ```
+
+先确认 Kotlin buffer 已由 `kotlin_lsp` attach；若 LSP 未 attach，补全、悬浮和项目代码跳转不能由 Android 导航模块替代。`AndroidInfo` 应显示有效的 project root、SDK 和 sources 目录。
 
 `init.lua` 中 `require("android").setup()` 已在 `require("lsp")` 之后，保证 `LspAttach` 之后覆盖 `gd`。
 
 ## 局限 / TODO
 
-- `kotlin_language_server` / `kotlin_lsp` 对 Compose 的 `stringResource` 等合成访问暂只支持 `R.string` 形式；纯字符串常量不追踪。
-- `R` 引用若跨 module（`:library:res`）仅搜索 `app/src/*/res` 与 `*/src/main/res`，未走 `gradle` 的 `sourceSets` 完整解析。
+- `kotlin_lsp` 对 Compose 的 `stringResource` 等合成访问暂只支持 `R.string` 形式；纯字符串常量不追踪。
+- `R` 引用若跨 module（`:library:res`）仅搜索一级模块的 `src/*/res`，未走 `gradle` 的 `sourceSets` 完整解析。
 - SDK 搜索对 Kotlin 源码 `.kt` 仅尝试同名 `.kt`，framework 几乎全是 `.java`，故一般够用。

@@ -71,6 +71,35 @@ function M.find_resource_file(rtype, rname, opts)
     return nil, string.format("resource %s/%s not found in %s", rtype, rname, table.concat(res_dirs, ", "))
   end
 
+  -- IDs may be declared in layout XML or values/ids.xml; handle them
+  -- before the generic values branch because R_TYPE_TO_DIR.id is "values".
+  if rtype == "id" then
+    for _, rd in ipairs(res_dirs) do
+      local lay = vim.fn.glob(rd .. "/layout*/*.xml", false, true)
+      for _, f in ipairs(lay) do
+        local lines = vim.fn.readfile(f)
+        for _, line in ipairs(lines) do
+          if line:find("@+id/" .. rname, 1, true)
+            or line:find("@id/" .. rname, 1, true)
+            or line:find('name="' .. rname .. '"', 1, true)
+          then
+            return f
+          end
+        end
+      end
+      local ids = vim.fn.glob(rd .. "/values*/ids.xml", false, true)
+      for _, f in ipairs(ids) do
+        local content = table.concat(vim.fn.readfile(f), "\n")
+        if content:find('name="' .. rname .. '"', 1, true)
+          or content:find("name='" .. rname .. "'", 1, true)
+        then
+          return f
+        end
+      end
+    end
+    return nil, "id " .. rname .. " not found"
+  end
+
   -- values types: need to search inside values/*.xml for name entry
   if dir_prefix == "values" then
     local expected = R_TYPE_TO_VALUES_FILE[rtype]
@@ -117,33 +146,6 @@ function M.find_resource_file(rtype, rname, opts)
       if first and first ~= "" then return first end
     end
     return nil, string.format("values resource %s/%s not found", rtype, rname)
-  end
-
-  -- id special: could be in any layout or values/ids.xml
-  if rtype == "id" then
-    for _, rd in ipairs(res_dirs) do
-      -- search layout files containing @+id/rname or @id/rname or android:id="@+id/rname"
-      local lay = vim.fn.glob(rd .. "/layout*/*.xml", false, true)
-      for _, f in ipairs(lay) do
-        local out = vim.fn.system({ "rg", "-q", rname, f })
-        if vim.v.shell_error == 0 then
-          -- confirm contains id
-          local lines = vim.fn.readfile(f)
-          for _, l in ipairs(lines) do if l:find(rname, 1, true) then return f end end
-        end
-      end
-      local ids = rd .. "/values/ids.xml"
-      if vim.fn.filereadable(ids) == 1 then
-        local c = table.concat(vim.fn.readfile(ids), "\n")
-        if c:find('name="' .. rname .. '"', 1, true) then return ids end
-      end
-    end
-    -- rg fallback across res
-    local hit = vim.fn.system({ "rg", "--files-with-matches", "@\\+?id/" .. rname, unpack(res_dirs) })
-    if vim.v.shell_error == 0 and hit ~= "" then
-      return vim.split(vim.trim(hit), "\n")[1]
-    end
-    return nil, "id " .. rname .. " not found"
   end
 
   return nil, "unsupported type " .. rtype

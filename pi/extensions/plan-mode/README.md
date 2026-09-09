@@ -15,7 +15,8 @@
 3. 模型调用精简 `plan_submit`，提交目标、决策、步骤、涉及文件、验证和风险。
 4. 审阅面板统一提供：
    - 实施
-   - 继续规划（可填写修改意见，留空直接继续）
+   - 编辑计划（填写修改意见，由模型生成新版本）
+   - 继续规划
    - 取消
 5. 用户选择实施后，面板展示临时启用的 `edit/write/bash`。扩展先设置工具并读回验证，再记录批准并进入实施。
 6. 模型通过 `plan_step_complete` 逐步上报；扩展自动继续下一步。真实阻塞调用 `plan_blocked`。
@@ -102,12 +103,6 @@ $PI_CODING_AGENT_DIR/plan-mode-policy.json
 - 连续两次 settled 且步骤 revision 未变化时自动 pause。
 - `plan_blocked` 立即 pause 并切回 planning-safe 工具。
 - 最后步骤完成后请求最终总结，再恢复 baseline 和清理 widget。
-
-## 并行步骤与 parallel_tasks 联动
-
-- 步骤可声明 `dependsOn`（引用 `S<n>`）表达依赖：未声明默认依赖前一步（串行）；`dependsOn: []` 表示无依赖、可与相邻步骤并行。非法引用/自环/环在提交时 fail-closed。
-- 实施时所有依赖已满足的步骤同时进入 running；`plan_step_complete` 可传可选 `stepId` 完成指定 running 步骤；全部步骤完成才进入 completed。
-- `parallel_tasks` 的子任务可带可选 `planStepId`，其完成进度会反映到计划列表对应步骤行（信息性）。步骤完成仍由模型 `plan_step_complete(stepId)` 权威推进，不自动推进。
 
 ## 计划工件
 

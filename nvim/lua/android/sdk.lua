@@ -219,6 +219,11 @@ function M.find_sdk_source(word, opts)
       local f = M.find_file_in_sources(sources, rel)
       if f then return f end
     end
+    -- An explicit third-party import must not be guessed as an Android
+    -- platform class with the same simple name (for example com.foo.View).
+    if not fqn:match("^(android|java|javax)%.") then
+      return nil, "source is outside platform SDK: " .. fqn
+    end
   end
 
   -- try common prefixes heuristic
@@ -247,25 +252,25 @@ function M.find_sdk_source(word, opts)
   return nil, "class " .. word .. " not found in SDK sources (" .. sources .. ")"
 end
 
-function M.goto_sdk(word)
-  local file, err, cands = M.find_sdk_source(word)
+function M.goto_sdk(word, opts)
+  opts = opts or {}
+  local file, err, cands = M.find_sdk_source(word, opts)
   if file then
     if cands and #cands > 1 then
-      -- multiple candidates: show selection
+      -- Multiple candidates require one user choice; do not also open a
+      -- speculative best guess before the picker callback runs.
       vim.ui.select(cands, { prompt = "Multiple SDK matches, pick one:" }, function(choice)
         if choice then vim.cmd("edit " .. vim.fn.fnameescape(choice)) end
       end)
-      -- also open best guess
-      vim.notify("multiple matches, opening best guess: " .. file, vim.log.levels.INFO)
-      vim.cmd("edit " .. vim.fn.fnameescape(file))
     else
       vim.cmd("edit " .. vim.fn.fnameescape(file))
     end
     return true
-  else
-    vim.notify(err or "SDK source not found", vim.log.levels.WARN)
-    return false
   end
+  if not opts.quiet then
+    vim.notify(err or "SDK source not found", vim.log.levels.WARN)
+  end
+  return false
 end
 
 --- helper used by xml.lua for tag jumps

@@ -1,5 +1,6 @@
 local sdk = require("android.sdk")
 local res = require("android.resources")
+local dependency = require("android.dependency")
 local util = require("android.util")
 
 local M = {}
@@ -69,10 +70,13 @@ function M.try_xml_jump()
         local fqn = pkg .. quoted
         -- try to find file for this class in project
         local rel = fqn:gsub("%.", "/")
+        local project_root = util.find_project_root()
         local globs = {
-          util.find_project_root() .. "/app/src/main/java/" .. rel .. ".*",
-          util.find_project_root() .. "/app/src/main/kotlin/" .. rel .. ".*",
-          util.find_project_root() .. "/**/" .. rel:match("([^/]+)$") .. ".*",
+          project_root .. "/app/src/main/java/" .. rel .. ".*",
+          project_root .. "/app/src/main/kotlin/" .. rel .. ".*",
+          project_root .. "/*/src/main/java/" .. rel .. ".*",
+          project_root .. "/*/src/main/kotlin/" .. rel .. ".*",
+          project_root .. "/**/" .. rel:match("([^/]+)$") .. ".*",
         }
         for _, pat in ipairs(globs) do
           local hits = vim.fn.glob(pat, false, true)
@@ -95,14 +99,33 @@ function M.try_xml_jump()
     elseif quoted:match("^[%w_]+%.[%w%.]+$") then
       -- FQN like com.example.Foo or android.view.View
       -- first try SDK, then project
-      if sdk.goto_sdk(quoted) then return true end
+      if sdk.goto_sdk(quoted, { quiet = true }) then return true end
       -- try project file
       local rel = quoted:gsub("%.", "/")
       local proj = util.find_project_root()
-      local hits = vim.fn.glob(proj .. "/app/src/main/java/" .. rel .. ".kt", false, true)
+      local project_paths = {
+        proj .. "/app/src/main/java/" .. rel .. ".kt",
+        proj .. "/app/src/main/kotlin/" .. rel .. ".kt",
+        proj .. "/*/src/main/java/" .. rel .. ".kt",
+        proj .. "/*/src/main/kotlin/" .. rel .. ".kt",
+      }
+      local hits = {}
+      for _, pattern in ipairs(project_paths) do
+        hits = vim.fn.glob(pattern, false, true)
+        if #hits > 0 then break end
+      end
       if #hits == 0 then hits = vim.fn.glob(proj .. "/**/" .. quoted:match("[%w_]+$") .. ".kt", false, true) end
       if #hits > 0 then vim.cmd("edit " .. vim.fn.fnameescape(hits[1])); return true end
-      hits = vim.fn.glob(proj .. "/app/src/main/java/" .. rel .. ".java", false, true)
+      local java_paths = {
+        proj .. "/app/src/main/java/" .. rel .. ".java",
+        proj .. "/app/src/main/kotlin/" .. rel .. ".java",
+        proj .. "/*/src/main/java/" .. rel .. ".java",
+        proj .. "/*/src/main/kotlin/" .. rel .. ".java",
+      }
+      for _, pattern in ipairs(java_paths) do
+        hits = vim.fn.glob(pattern, false, true)
+        if #hits > 0 then break end
+      end
       if #hits > 0 then vim.cmd("edit " .. vim.fn.fnameescape(hits[1])); return true end
     end
   end
@@ -117,15 +140,24 @@ function M.try_xml_jump()
     if col >= ts and col <= te + 2 then
       if tag:match("%.") then
         -- custom view FQN: com.example.MyView
-        local f = sdk.find_sdk_source(tag)
-        -- first try project, then sdk (custom view won't be in sdk)
+        -- First try project; custom views are normally not in platform SDK sources.
         local proj = util.find_project_root()
         local rel = tag:gsub("%.", "/")
-        local cand = vim.fn.glob(proj .. "/app/src/main/java/" .. rel .. ".kt", false, true)
-        if #cand == 0 then cand = vim.fn.glob(proj .. "/app/src/main/java/" .. rel .. ".java", false, true) end
-        if #cand == 0 then cand = vim.fn.glob(proj .. "/**/" .. tag:match("[%w_]+$") .. ".kt", false, true) end
+        local project_patterns = {
+          proj .. "/app/src/main/java/" .. rel .. ".kt",
+          proj .. "/app/src/main/kotlin/" .. rel .. ".kt",
+          proj .. "/app/src/main/java/" .. rel .. ".java",
+          proj .. "/app/src/main/kotlin/" .. rel .. ".java",
+          proj .. "/**/" .. tag:match("[%w_]+$") .. ".kt",
+        }
+        local cand = {}
+        for _, pattern in ipairs(project_patterns) do
+          cand = vim.fn.glob(pattern, false, true)
+          if #cand > 0 then break end
+        end
         if #cand > 0 then vim.cmd("edit " .. vim.fn.fnameescape(cand[1])); return true end
         -- try sdk (might be androidx)
+        local f = sdk.find_sdk_source(tag)
         if f then vim.cmd("edit " .. vim.fn.fnameescape(f)); return true end
         -- rg search anywhere in project
         local simple = tag:match("%.([%w_]+)$")
@@ -139,8 +171,10 @@ function M.try_xml_jump()
         -- simple widget tag: TextView etc.
         local mapped = sdk.get_xml_tag_map()[tag]
         if mapped then
-          if sdk.goto_sdk(mapped) then return true end
-          if sdk.goto_sdk(tag) then return true end
+          -- AndroidX/material classes are not in platform SDK sources. Keep
+          -- this quiet so an attached LSP can handle the definition instead.
+          if sdk.goto_sdk(mapped, { quiet = true }) then return true end
+          if sdk.goto_sdk(tag, { quiet = true }) then return true end
         else
           -- try heuristic: android.widget.Tag or android.view.Tag
           for _, prefix in ipairs({ "android.widget", "android.view", "android.webkit" }) do
@@ -148,7 +182,7 @@ function M.try_xml_jump()
             local f = sdk.find_sdk_source(fqn)
             if f then vim.cmd("edit " .. vim.fn.fnameescape(f)); return true end
           end
-          if sdk.goto_sdk(tag) then return true end
+          if sdk.goto_sdk(tag, { quiet = true }) then return true end
         end
       end
     end
@@ -204,7 +238,7 @@ function M.try_code_jump()
     -- if line contains import and cursor on class, try fqn detection via <cWORD>
     local fqn = cWORD:gsub("[^%w%.%_]+", "")
     if fqn:match("%.") and fqn:match("^[%w%.]+$") then
-      if sdk.goto_sdk(fqn) then return true end
+      if sdk.goto_sdk(fqn, { quiet = true }) then return true end
     end
   end
 
@@ -222,12 +256,17 @@ function M.jump()
   -- xml-specific
   if ft == "xml" or name:match("%.xml$") then
     if M.try_xml_jump() then return end
-    -- still try sdk fallback for tag under cursor
+    -- still try SDK fallback for a platform tag under the cursor, but keep
+    -- misses quiet so AndroidX/custom tags can fall through to LSP.
     local w = sdk.word_under_cursor()
     if w and w:match("^[A-Z]") then
-      if sdk.goto_sdk(w) then return end
+      if sdk.goto_sdk(w, { quiet = true }) then return end
     end
-    vim.notify("no XML target found at cursor", vim.log.levels.INFO)
+    if #vim.lsp.get_clients({ bufnr = 0 }) > 0 then
+      dependency.definition()
+    else
+      vim.notify("no XML target found at cursor", vim.log.levels.INFO)
+    end
     return
   end
 
@@ -237,19 +276,23 @@ function M.jump()
     -- final fallback: try SDK source under cursor
     local w = sdk.word_under_cursor()
     if w and w ~= "" then
-      if sdk.goto_sdk(w) then return end
+      if sdk.goto_sdk(w, { quiet = true }) then return end
     end
-    -- fallback to LSP definition
-    vim.notify("no Android resource/SDK target, falling back to LSP", vim.log.levels.INFO)
-    vim.lsp.buf.definition()
+    -- fallback to LSP definition without an extra warning on every ordinary
+    -- project symbol or method.
+    if #vim.lsp.get_clients({ bufnr = 0 }) > 0 then
+      dependency.definition()
+    else
+      vim.notify("no Android target and no LSP client attached", vim.log.levels.INFO)
+    end
     return
   end
 
   -- other filetypes: try resource then sdk then lsp
   if M.try_code_jump() then return end
   local w = sdk.word_under_cursor()
-  if w and sdk.goto_sdk(w) then return end
-  if vim.lsp.buf then pcall(vim.lsp.buf.definition) end
+  if w and sdk.goto_sdk(w, { quiet = true }) then return end
+  if vim.lsp.buf then pcall(dependency.definition) end
 end
 
 return M

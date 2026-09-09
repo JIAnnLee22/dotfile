@@ -12,17 +12,16 @@
 
 **已改动（`git diff HEAD` + untracked）：**
 - `nvim/init.lua:3` 新增 `require("android").setup()`
-- `nvim/lsp/jdtls.lua` 重写：新增 `find_java_executable()` 探测 `vim.g.java_home/JAVA_HOME → /usr/lib/jvm/java-21 → java-26 → default-runtime`，要求 `>=21`，`cmd = {'jdtls','--java-executable',java_exec,'-data',...}`
-- `nvim/lsp/kotlin_language_server.lua` 修复 `storagePath = vim.fs.root(expand('%:p:h'))` 启动期求值 bug → 改 `stdpath('cache')/kotlin-language-server`（`before_init` 按 `root_dir` 注入为可选）
-- `nvim/lsp/kotlin_lsp.lua` **新增**：JetBrains `intellij-server --stdio` 配置，`root_markers={settings.gradle.kts,gradlew,.git,...}`，Android 首选
-- `nvim/lua/lsp.lua` 重写：`completeopt=menu,menuone,noselect,popup,fuzzy`；`pcall(packadd blink.cmp) → blink.get_lsp_capabilities → blink.setup{keymap preset default, completion.menu auto_show, signature, sources=lsp/path/snippets/buffer, fuzzy prefer_rust}` 失败回落原生 `make_client_capabilities + snippetSupport`；`inject_caps` 注入 `lua_ls/tsgo/clangd/jdtls/kotlin_lsp`；`enable{lua_ls,tsgo,clangd,jdtls,kotlin_lsp}`（**单启 `kotlin_lsp`，勿与 `kotlin_language_server` 双开**）；`diagnostic` + `LspAttach` 分流 `blink`/`vim.lsp.completion`、启用 `inlay_hint`、映射 `K/gD/gr/gi/<leader>rn/ca/e/[d/]d`，命令 `LspCapabilitiesInfo`
+- `nvim/lsp/jdtls.lua` 使用 NixOS 的 `JAVA_HOME`/PATH 校验可选 Java 21，并为每个 Gradle 根生成独立的哈希 workspace；无有效用户 JVM 时交给 Nix jdtls wrapper 使用自带 Java 21
+- `nvim/lsp/kotlin_lsp.lua` 使用 JetBrains 官方 `kotlin-lsp --stdio`，通过 `root_markers` 识别 Gradle/Android 项目，禁止孤立 Kotlin 文件启动服务
+- `nvim/lua/lsp.lua` 重写：`completeopt=menu,menuone,noselect,popup,fuzzy`；`pcall(packadd blink.cmp) → blink.get_lsp_capabilities → blink.setup{keymap preset default, completion.menu auto_show, signature, sources=lsp/path/snippets/buffer, fuzzy prefer_rust}` 失败回落原生 `make_client_capabilities + snippetSupport`；`inject_caps` 注入 `lua_ls/tsgo/clangd/jdtls/kotlin_lsp`；`enable{lua_ls,tsgo,clangd,jdtls,kotlin_lsp}`（**仅启 `kotlin_lsp`**）；`diagnostic` + `LspAttach` 分流 `blink`/`vim.lsp.completion`、启用 `inlay_hint`、映射 `K/gD/gr/gi/<leader>rn/ca/e/[d/]d`，命令 `LspCapabilitiesInfo`
 - `nvim/lua/android/{init,util,sdk,resources,xml}.lua + README.md` 新增：SDK 源码跳转（`@ANDROID_HOME/$ANDROID_SDK_ROOT/local.properties: sdk.dir → ~/Android/Sdk` + `compileSdk release(36)+minorApiLevel→36.1 → sources/android-36.1` 有效性过滤）+ XML↔Kotlin 资源跳转（`R.layout / @string/@mipmap / <TextView> / <com.foo.Bar> / tools:context=".MainActivity"`），`gd` 智能覆盖、`gf` 增强、`:AndroidGoto/Sdk/Res/Info`
 - `pi/models-store.json` 为 `pi` 自动生成，**忽略不移植**
 
 **文件树（`~/dotfile/nvim`）：**
 ```
 init.lua
-lsp/{clangd,jdtls,kotlin_language_server,kotlin_lsp,lua_ls,tsgo}.lua
+lsp/{clangd,jdtls,kotlin_lsp,lua_ls,tsgo}.lua
 lua/{lsp,android/{init,util,sdk,resources,xml,README.md},options,autocommands,...}.lua
 ```
 `~/.config/nvim -> ~/dotfile/nvim`，验证 `nvim --headless -c "qa"` exit 0 且 `completeopt=menu,menuone,noselect,popup,fuzzy`、`_enabled_configs` 含 `kotlin_lsp`。
@@ -31,7 +30,7 @@ lua/{lsp,android/{init,util,sdk,resources,xml,README.md},options,autocommands,..
 
 **必须做（按序）：**
 1. **声明 LSP 二进制**：`extraPackages`（或 `environment.systemPackages`）提供 `kotlin-lsp`（`intellij-server` 自带 jbr）、`jdt-language-server`、`lua-language-server`、`clangd`、`ripgrep`；`tsgo` 若无包则保留失败容错。**禁止硬编码 `/usr/bin|/usr/sbin|/usr/lib/jvm`**。
-2. **修正 `lsp/jdtls.lua` 的 JVM 路径发现**：Arch 版探测 `/usr/lib/jvm/*` 在 NixOS 失效。改为优先 `vim.g.java_home`/`JAVA_HOME`（指向 `pkgs.jdk21`），次选 `lib.getExe pkgs.jdk21` / `pkgs.jdk21` 的 `bin/java`，用 `vim.fn.executable` + `java -version` 校验 `>=21`。提供 `home-manager` 示例：`home.sessionVariables.JAVA_HOME = "${pkgs.jdk21}/lib/openjdk"` 或 `programs.neovim.extraPackages`.
+2. **修正 `lsp/jdtls.lua` 的 JVM 运行时**：不再硬编码 `/usr/lib/jvm/*`；优先校验 `vim.g.java_home`/`JAVA_HOME` 和 PATH 中的 Java 21，找不到时不传 `--java-executable`，交给 Nix jdtls wrapper 使用自带 Java 21。`JAVA_HOME` 仍用于 Gradle 项目导入。
 3. **声明 Java**：`RomoteControl` 需 `jdk21`（jdtls 硬要求），`jdk17/jdk11` 可选留作回落；`gradle 9.1` 用 `jdk21/26` 均可，优先 `jdk21` 稳定。
 4. **blink.cmp**：Arch 版 `pack/core/opt/blink.cmp` 预编译 `target/release/libblink_cmp_fuzzy.so`。NixOS 改用 `pkgs.vimPlugins.blink-cmp`（`home-manager.programs.neovim.plugins`）或保留 `packadd` 但确保 `fuzzy.implementation = "prefer_rust"` 在缺 `cargo` 时回落 `lua`。`lua/lsp.lua` 已兼容：`pcall(packadd)` 失败走原生分支，发版前需 `nvim --headless -c "lua require('blink.cmp').get_lsp_capabilities()"` 自检。
 5. **Android SDK**：NixOS 无 `/home/.../Android/Sdk` 固定位。`android/util.lua` 已支持 `vim.g.android_sdk_dir` / `$ANDROID_HOME` / `local.properties` 三级回落，**在 NixOS 需显式设其一**：`home.sessionVariables.ANDROID_SDK_ROOT = "/home/<user>/Android/Sdk"` 或 `androidenv` 暴露，或在 `flake.nix` 写 `local.properties`。`sources/android-36.1` 需 `sdkmanager --install "sources;android-36"` 预装，空壳 `android-36` 已被过滤。
@@ -39,14 +38,14 @@ lua/{lsp,android/{init,util,sdk,resources,xml,README.md},options,autocommands,..
 
 **可选/勿做：**
 - 不引入 `mason.nvim`（已装但未启用，保持惰性）；
-- 不同时 `enable kotlin_language_server + kotlin_lsp`；
+- 不添加或启用旧的 `kotlin-language-server` 配置；
 - 不改 `android/` 五文件逻辑，仅同步。
 
 ## 3. 约束
 
 - Nix 表达式中 `cmd` 禁止写死 Arch 绝对路径，统一用 `lib.getExe` 或 `PATH` 注入。
 - `completeopt` 必须含 `menu,menuone,popup`，否则单候选不弹。
-- `kotlin_lsp` 为 Android 默认，`kotlin_language_server` 仅作非 Android 纯 Kotlin 备用，需显式切换。
+- `kotlin_lsp` 是唯一 Kotlin LSP；非 Gradle 的孤立 Kotlin 文件不自动启动服务。
 - 保留 `~/.config/nvim -> ~/dotfile/nvim` 结构，`git status` 仅 `nvim/` 相关为脏。
 
 ## 4. 验收（在 NixOS 上逐条跑通）

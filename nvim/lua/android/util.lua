@@ -8,6 +8,10 @@ local compile_sdk_cache = {}
 function M.find_project_root(startpath)
   startpath = startpath or vim.fn.expand("%:p:h")
   if startpath == "" then startpath = vim.fn.getcwd() end
+  -- Callers may pass either a buffer directory or an absolute file path.
+  if vim.fn.filereadable(startpath) == 1 then
+    startpath = vim.fs.dirname(startpath)
+  end
   -- priority 1: multi-module / repo root markers
   local root_markers = { "settings.gradle.kts", "settings.gradle", "gradlew", ".git" }
   local found = vim.fs.find(root_markers, { upward = true, path = startpath })
@@ -48,6 +52,7 @@ function M.parse_local_properties(root)
         -- expand leading ~ and handle \: escaping on windows->linux? keep simple
         v = v:gsub("\\:", ":"):gsub("\\\\", "\\")
         if v:sub(1,1) == "~" then v = vim.fn.expand(v) end
+        if not v:match("^/") then v = root .. "/" .. v end
         f:close()
         return v
       end
@@ -68,11 +73,8 @@ function M.get_sdk_dir(opts)
   if vim.g.android_sdk_dir and vim.fn.isdirectory(vim.g.android_sdk_dir) == 1 then
     return normalize_sdk_dir(vim.g.android_sdk_dir)
   end
-  -- env
-  local env = os.getenv("ANDROID_HOME") or os.getenv("ANDROID_SDK_ROOT") or os.getenv("ANDROID_SDK_HOME")
-  if env and vim.fn.isdirectory(env) == 1 then return normalize_sdk_dir(env) end
-
-  -- per-project cache
+  -- Per-project configuration is authoritative for Android builds. This avoids
+  -- an unrelated ANDROID_HOME shadowing the SDK selected by Gradle.
   local root = opts.root or M.find_project_root(opts.startpath)
   if sdk_dir_cache[root] then return sdk_dir_cache[root] end
 
@@ -82,6 +84,10 @@ function M.get_sdk_dir(opts)
     sdk_dir_cache[root] = from_props
     return from_props
   end
+
+  -- Environment fallback for projects without local.properties.
+  local env = os.getenv("ANDROID_HOME") or os.getenv("ANDROID_SDK_ROOT") or os.getenv("ANDROID_SDK_HOME")
+  if env and vim.fn.isdirectory(env) == 1 then return normalize_sdk_dir(env) end
 
   -- fallback candidates
   local candidates = {
@@ -221,16 +227,17 @@ function M.get_res_dirs(root)
       table.insert(dirs, p)
     end
   end
-  -- main
+  -- main application module
   add(root .. "/app/src/main/res")
-  -- any src/*/res
+  -- Any source set in the application module.
   local globs = vim.fn.glob(root .. "/app/src/*/res", false, true)
   for _, g in ipairs(globs) do add(g) end
-  -- root res ?
+  -- A project may use a non-app Android module or a root res directory.
   add(root .. "/res")
-  -- library modules
   local mod_globs = vim.fn.glob(root .. "/*/src/main/res", false, true)
   for _, g in ipairs(mod_globs) do add(g) end
+  local source_globs = vim.fn.glob(root .. "/*/src/*/res", false, true)
+  for _, g in ipairs(source_globs) do add(g) end
   return dirs
 end
 

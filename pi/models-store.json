@@ -1782,7 +1782,7 @@
         "maxTokens": 65536
       }
     ],
-    "checkedAt": 1788763240411,
+    "checkedAt": 1788484701057,
     "lastModified": 1788432047000,
     "etag": "W/\"f0ae47e2bddd3c5cf3b08ad688536bd1\""
   },
@@ -1889,7 +1889,7 @@
         }
       }
     ],
-    "checkedAt": 1788763240418,
+    "checkedAt": 1788484700943,
     "lastModified": 1787659145000,
     "etag": "W/\"c498073149d3b5ff2cd526408548a964\""
   },
@@ -1966,7 +1966,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1788763240238,
+    "checkedAt": 1788484701068,
     "lastModified": 1786970942000,
     "etag": "W/\"3db76cd3404affdf755b2efc443b74c3\""
   },
@@ -2600,40 +2600,6 @@
         }
       },
       {
-        "id": "omen-alpha",
-        "name": "Omen Alpha",
-        "api": "openai-completions",
-        "provider": "opencode-go",
-        "baseUrl": "https://opencode.ai/zen/go/v1",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "cost": {
-          "input": 0.2,
-          "output": 0.66,
-          "cacheRead": 0.04,
-          "cacheWrite": 0
-        },
-        "compat": {
-          "supportsStore": false,
-          "supportsDeveloperRole": false,
-          "maxTokensField": "max_tokens"
-        },
-        "contextWindow": 500000,
-        "maxTokens": 128000,
-        "thinkingLevelMap": {
-          "off": null,
-          "minimal": null,
-          "low": "low",
-          "medium": null,
-          "high": "high",
-          "xhigh": null,
-          "max": null
-        }
-      },
-      {
         "id": "qwen3.6-plus",
         "name": "Qwen3.6 Plus",
         "api": "openai-completions",
@@ -2763,9 +2729,9 @@
         }
       }
     ],
-    "checkedAt": 1788763240226,
-    "lastModified": 1788552642000,
-    "etag": "W/\"55d12abe1f71bc22552b418c2e14d8b2\""
+    "checkedAt": 1788484701036,
+    "lastModified": 1788432049000,
+    "etag": "W/\"ae5d7258aed546bffedf8cc3462470ee\""
   },
   "openai-codex": {
     "models": [
@@ -3013,54 +2979,11 @@
           "supportsAdditionalTools": true,
           "supportsToolSearch": true
         }
-      },
-      {
-        "id": "gpt-6-astra",
-        "name": "GPT-6 Astra",
-        "api": "openai-codex-responses",
-        "provider": "openai-codex",
-        "baseUrl": "https://chatgpt.com/backend-api",
-        "reasoning": true,
-        "input": [
-          "text",
-          "image"
-        ],
-        "cost": {
-          "input": 10,
-          "output": 50,
-          "cacheRead": 1,
-          "cacheWrite": 12.5,
-          "tiers": [
-            {
-              "inputTokensAbove": 272000,
-              "input": 20,
-              "output": 75,
-              "cacheRead": 2,
-              "cacheWrite": 25
-            }
-          ]
-        },
-        "contextWindow": 272000,
-        "maxTokens": 128000,
-        "thinkingLevelMap": {
-          "off": null,
-          "minimal": "low",
-          "low": "low",
-          "medium": "medium",
-          "high": "high",
-          "xhigh": "xhigh",
-          "max": "max"
-        },
-        "compat": {
-          "supportsOpenAIGrammarTools": true,
-          "supportsAdditionalTools": true,
-          "supportsToolSearch": true
-        }
       }
     ],
-    "checkedAt": 1788763241049,
-    "lastModified": 1788552640000,
-    "etag": "W/\"d1bab54af7a1a3ffdc37c8c22afc1b4d\""
+    "checkedAt": 1788484700982,
+    "lastModified": 1786365287000,
+    "etag": "W/\"7572a78e60b78526600ed2a9b74b579d\""
   },
   "zai-coding-cn": {
     "models": [
@@ -3383,7 +3306,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1788763240233,
+    "checkedAt": 1788484701206,
     "lastModified": 1787823144000,
     "etag": "W/\"7cd2d45f2051c8cfd27eda274dfe2cfb\""
   },
