@@ -30,8 +30,6 @@ export OBSFILE_ROOT=$HOME/obs/obsfile/
 PATH=$PATH:$HOME/obs/obsgen/linux/
 PATH=$HOME/.npm-global/bin:$PATH
 
-# Pi coding agent config directory
-export PI_CODING_AGENT_DIR=$HOME/.config/pi
 # auth when tui need sudo
 export SUDO_ASKPASS=/usr/lib/ssh/x11-ssh-askpass
 

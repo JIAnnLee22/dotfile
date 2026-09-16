@@ -6,17 +6,15 @@
   "defaultThinkingLevel": "high",
   "doubleEscapeAction": "tree",
   "editorPaddingX": 0,
-  "extensions": [
-    "./extensions/patch/index.ts"
-  ],
+  "extensions": [],
   "fullscreenScrollbar": "hidden",
   "hideThinkingBlock": false,
   "lastChangelogVersion": "0.84.4",
   "outputPad": 0,
   "packages": [
-    "npm:@ff-labs/pi-fff",
-    "npm:pi-web-access",
-    "npm:context-mode"
+    "npm:@ff-labs/pi-fff@0.10.3",
+    "npm:pi-web-access@0.22.0",
+    "npm:context-mode@1.0.169"
   ],
   "quietStartup": true,
   "skills": [
