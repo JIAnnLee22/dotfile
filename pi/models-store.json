@@ -44,13 +44,14 @@
         },
         "contextWindow": 1000000,
         "maxTokens": 128000,
+        "compat": {
+          "supportsMidConvoSystemMessages": true,
+          "forceAdaptiveThinking": true
+        },
         "thinkingLevelMap": {
           "off": null,
           "xhigh": "xhigh",
           "max": "max"
-        },
-        "compat": {
-          "forceAdaptiveThinking": true
         }
       },
       {
@@ -72,13 +73,14 @@
         },
         "contextWindow": 1000000,
         "maxTokens": 128000,
+        "compat": {
+          "supportsMidConvoSystemMessages": true,
+          "forceAdaptiveThinking": true
+        },
         "thinkingLevelMap": {
           "off": null,
           "xhigh": "xhigh",
           "max": "max"
-        },
-        "compat": {
-          "forceAdaptiveThinking": true
         }
       },
       {
@@ -194,13 +196,14 @@
         },
         "contextWindow": 1000000,
         "maxTokens": 128000,
+        "compat": {
+          "supportsMidConvoSystemMessages": true,
+          "forceAdaptiveThinking": true,
+          "supportsTemperature": false
+        },
         "thinkingLevelMap": {
           "xhigh": "xhigh",
           "max": "max"
-        },
-        "compat": {
-          "forceAdaptiveThinking": true,
-          "supportsTemperature": false
         }
       },
       {
@@ -222,13 +225,14 @@
         },
         "contextWindow": 1000000,
         "maxTokens": 128000,
+        "compat": {
+          "supportsMidConvoSystemMessages": true,
+          "forceAdaptiveThinking": true,
+          "supportsTemperature": false
+        },
         "thinkingLevelMap": {
           "xhigh": "xhigh",
           "max": "max"
-        },
-        "compat": {
-          "forceAdaptiveThinking": true,
-          "supportsTemperature": false
         }
       },
       {
@@ -436,6 +440,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": "minimal",
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -447,10 +460,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.1-pro",
@@ -459,6 +469,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -470,14 +489,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null,
-          "minimal": null,
-          "low": "LOW",
-          "medium": null,
-          "high": "HIGH"
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.5-flash",
@@ -486,6 +498,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": "minimal",
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -497,10 +518,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.5-flash-lite",
@@ -509,6 +527,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": "minimal",
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -520,10 +547,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.6-flash",
@@ -532,6 +556,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": "minimal",
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -543,10 +576,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.7-flash",
@@ -555,6 +585,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -566,10 +605,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "gemini-3.8-flash",
@@ -578,6 +614,15 @@
         "provider": "opencode",
         "baseUrl": "https://opencode.ai/zen/v1",
         "reasoning": true,
+        "thinkingLevelMap": {
+          "off": null,
+          "minimal": null,
+          "low": "low",
+          "medium": "medium",
+          "high": "high",
+          "xhigh": null,
+          "max": null
+        },
         "input": [
           "text",
           "image"
@@ -589,10 +634,7 @@
           "cacheWrite": 0
         },
         "contextWindow": 1048576,
-        "maxTokens": 65536,
-        "thinkingLevelMap": {
-          "off": null
-        }
+        "maxTokens": 65536
       },
       {
         "id": "glm-5",
@@ -1091,7 +1133,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 272000,
         "maxTokens": 128000,
@@ -1124,7 +1168,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 400000,
         "maxTokens": 128000,
@@ -1190,7 +1236,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1223,7 +1271,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1289,7 +1339,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1322,7 +1374,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1355,7 +1409,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1388,7 +1444,9 @@
         },
         "compat": {
           "sessionAffinityFormat": "openai-nosession",
-          "supportsOpenAIGrammarTools": true
+          "supportsOpenAIGrammarTools": true,
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -1595,7 +1653,9 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
-          "maxTokensField": "max_tokens"
+          "maxTokensField": "max_tokens",
+          "supportsMidConvoSystemMessages": true,
+          "supportsMidConvoToolAdditions": true
         },
         "contextWindow": 1048576,
         "maxTokens": 131072,
@@ -1947,11 +2007,31 @@
         },
         "contextWindow": 262144,
         "maxTokens": 65536
+      },
+      {
+        "id": "union-alpha",
+        "name": "Union Alpha Free",
+        "api": "anthropic-messages",
+        "provider": "opencode",
+        "baseUrl": "https://opencode.ai/zen",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "contextWindow": 262144,
+        "maxTokens": 131072
       }
     ],
-    "checkedAt": 1789627139041,
-    "lastModified": 1789562357000,
-    "etag": "W/\"1d9d85ca687a5877340af69ffce00612\""
+    "checkedAt": 1789715652565,
+    "lastModified": 1789648057000,
+    "etag": "W/\"3ce823f2ec2b24b980886a10f62123c3\""
   },
   "deepseek": {
     "models": [
@@ -2012,7 +2092,8 @@
           "supportsDeveloperRole": false,
           "maxTokensField": "max_tokens",
           "requiresReasoningContentOnAssistantMessages": true,
-          "thinkingFormat": "deepseek"
+          "thinkingFormat": "deepseek",
+          "supportsMidConvoSystemMessages": true
         },
         "thinkingLevelMap": {
           "minimal": null,
@@ -2023,9 +2104,9 @@
         }
       }
     ],
-    "checkedAt": 1789627139066,
-    "lastModified": 1789562338000,
-    "etag": "W/\"6fe6c05f6b94acbd34aa69e48a27e36e\""
+    "checkedAt": 1789715655780,
+    "lastModified": 1789648038000,
+    "etag": "W/\"aac749a582cc544bee518bf670931099\""
   },
   "xiaomi": {
     "models": [
@@ -2100,7 +2181,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1789627138751,
+    "checkedAt": 1789715653573,
     "lastModified": 1786970942000,
     "etag": "W/\"3db76cd3404affdf755b2efc443b74c3\""
   },
@@ -2382,7 +2463,9 @@
           "cacheWrite": 0.25
         },
         "compat": {
-          "sessionAffinityFormat": "openai-nosession"
+          "sessionAffinityFormat": "openai-nosession",
+          "supportsMidConvoSystemMessages": true,
+          "supportsAdditionalTools": true
         },
         "contextWindow": 1050000,
         "maxTokens": 128000,
@@ -2572,7 +2655,9 @@
         "compat": {
           "supportsStore": false,
           "supportsDeveloperRole": false,
-          "maxTokensField": "max_tokens"
+          "maxTokensField": "max_tokens",
+          "supportsMidConvoSystemMessages": true,
+          "supportsMidConvoToolAdditions": true
         },
         "contextWindow": 1048576,
         "maxTokens": 131072,
@@ -2895,11 +2980,31 @@
           "xhigh": "xhigh",
           "max": null
         }
+      },
+      {
+        "id": "union-alpha",
+        "name": "Union Alpha Free",
+        "api": "anthropic-messages",
+        "provider": "opencode-go",
+        "baseUrl": "https://opencode.ai/zen/go",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "cost": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        },
+        "contextWindow": 262144,
+        "maxTokens": 131072
       }
     ],
-    "checkedAt": 1789627139038,
-    "lastModified": 1789562358000,
-    "etag": "W/\"5123cf08c50ab97da3bda970be0ebe41\""
+    "checkedAt": 1789715653266,
+    "lastModified": 1789648059000,
+    "etag": "W/\"b949ea60fd96ecc3ac173ae8614d3979\""
   },
   "openai-codex": {
     "models": [
@@ -2963,7 +3068,8 @@
         },
         "compat": {
           "supportsOpenAIGrammarTools": true,
-          "supportsToolSearch": true
+          "supportsToolSearch": true,
+          "supportsMidConvoSystemMessages": true
         }
       },
       {
@@ -3002,7 +3108,8 @@
         "compat": {
           "supportsOpenAIGrammarTools": true,
           "supportsAdditionalTools": true,
-          "supportsToolSearch": true
+          "supportsToolSearch": true,
+          "supportsMidConvoSystemMessages": true
         }
       },
       {
@@ -3041,7 +3148,8 @@
         "compat": {
           "supportsOpenAIGrammarTools": true,
           "supportsAdditionalTools": true,
-          "supportsToolSearch": true
+          "supportsToolSearch": true,
+          "supportsMidConvoSystemMessages": true
         }
       },
       {
@@ -3080,7 +3188,8 @@
         "compat": {
           "supportsOpenAIGrammarTools": true,
           "supportsAdditionalTools": true,
-          "supportsToolSearch": true
+          "supportsToolSearch": true,
+          "supportsMidConvoSystemMessages": true
         }
       },
       {
@@ -3123,13 +3232,14 @@
         "compat": {
           "supportsOpenAIGrammarTools": true,
           "supportsAdditionalTools": true,
-          "supportsToolSearch": true
+          "supportsToolSearch": true,
+          "supportsMidConvoSystemMessages": true
         }
       }
     ],
-    "checkedAt": 1789627138750,
-    "lastModified": 1789562356000,
-    "etag": "W/\"70d0125796d9c9e1f7b38bbf967d0bc7\""
+    "checkedAt": 1789715653206,
+    "lastModified": 1789648056000,
+    "etag": "W/\"611b646eb8fe726a315a1544235fa980\""
   },
   "zai-coding-cn": {
     "models": [
@@ -3452,7 +3562,7 @@
         "maxTokens": 131072
       }
     ],
-    "checkedAt": 1789627138754,
+    "checkedAt": 1789715652566,
     "lastModified": 1787823144000,
     "etag": "W/\"7cd2d45f2051c8cfd27eda274dfe2cfb\""
   },
