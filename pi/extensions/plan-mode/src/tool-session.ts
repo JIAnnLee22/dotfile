@@ -3,6 +3,8 @@ import { CapabilityRegistry, type ToolInfoLike } from "./capability-registry.ts"
 import type { PlanScope, ToolBaselineRecord } from "./domain.ts";
 
 export const MANDATORY_IMPLEMENTATION_TOOLS = ["edit", "write", "bash"] as const;
+/** Normal-conversation coordination tools suppressed while a PlanSpec is active to avoid duplicate progress controllers. */
+export const PLAN_SUPPRESSED_BASELINE_TOOLS = new Set(["todo"]);
 export const PLAN_MANAGED_TOOLS = ["plan_question", "plan_submit", "plan_step_complete", "plan_blocked"] as const;
 /** 实施期协调工具：步骤派发与 diff 应用，仅 implementing 状态可用。 */
 export const ORCHESTRATOR_MANAGED_TOOLS = ["plan_dispatch_step", "plan_apply_diff"] as const;
@@ -106,7 +108,7 @@ export class ToolSession {
 		}
 		const registered = new Set(all.map((tool) => tool.name));
 		const requested = unique([
-			...baseline.toolNames.filter((name) => registered.has(name)),
+			...baseline.toolNames.filter((name) => registered.has(name) && !PLAN_SUPPRESSED_BASELINE_TOOLS.has(name)),
 			...MANDATORY_IMPLEMENTATION_TOOLS,
 			...PLAN_MANAGED_TOOLS.filter((name) => registered.has(name)),
 			...ORCHESTRATOR_MANAGED_TOOLS.filter((name) => registered.has(name)),

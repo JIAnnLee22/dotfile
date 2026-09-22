@@ -37,6 +37,7 @@ function tools(): ToolInfoLike[] {
 		packageTool("ffgrep", "npm:@ff-labs/pi-fff", TOOL_PATHS.fff),
 		packageTool("ctx_search", "npm:context-mode", TOOL_PATHS.context),
 		packageTool("ctx_index", "npm:context-mode", TOOL_PATHS.context),
+		{ name: "todo", sourceInfo: { source: "npm:@gamaraan/todos-tool@0.2.4", path: "/agent/npm/node_modules/@gamaraan/todos-tool/src/index.ts" } },
 		...PLAN_MANAGED_TOOLS.map((name) => ({ name, sourceInfo: { source: "extension", path: "/agent/plan-mode/index.ts" } })),
 	];
 }
@@ -83,6 +84,18 @@ test("PM4-P0-006 prepareImplementation readback is mandatory and rolls back on f
 	assert.equal(failed.ok, false);
 	assert.ok(failed.missing.includes("bash"));
 	assert.equal(broken.getActiveTools().includes("edit"), false, "rollback must restore planning-safe tools");
+});
+
+test("PM4-P0-007 normal-mode todo is suppressed for implementation and restored after plan exit", () => {
+	const todoBaseline = { ...baseline, toolNames: [...baseline.toolNames, "todo"] };
+	const port = new FakePort(todoBaseline.toolNames, tools());
+	const session = new ToolSession(port, testRegistry());
+	const prepared = session.prepareImplementation(todoBaseline);
+	assert.equal(prepared.ok, true, prepared.reason);
+	assert.equal(prepared.active.includes("todo"), false);
+	const restored = session.restoreBaseline(todoBaseline);
+	assert.equal(restored.ok, true, restored.reason);
+	assert.equal(restored.active.includes("todo"), true);
 });
 
 test("PM4-P0-006 mandatory tools must be builtin source, not overridden", () => {

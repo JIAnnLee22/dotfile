@@ -14,7 +14,8 @@
   "packages": [
     "npm:@ff-labs/pi-fff@0.10.3",
     "npm:pi-web-access@0.22.0",
-    "npm:context-mode@1.0.169"
+    "npm:context-mode@1.0.169",
+    "npm:@gamaraan/todos-tool@0.2.4"
   ],
   "quietStartup": true,
   "skills": [
