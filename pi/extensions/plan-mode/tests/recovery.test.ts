@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import test from "node:test";
 import { canonicalJson } from "../src/canonical.ts";
 import { PlanController } from "../src/controller.ts";
+import { AUDIT_ENTRY_TYPE, projectJournal } from "../src/journal.ts";
 import type { PlanScope } from "../src/domain.ts";
 import {
 	calculateLegacyPlanHash,
@@ -23,6 +24,24 @@ import {
 	start,
 	submit,
 } from "./helpers.ts";
+
+test("PM4-P0-015 tampered tool baseline digest fails journal projection closed", async () => {
+	const f = await fixture();
+	try {
+		await start(f.controller, f.scope);
+		const entries = f.journal.events.map((event, index) => ({
+			type: "custom",
+			customType: AUDIT_ENTRY_TYPE,
+			data: index === 0
+				? { ...event, data: { ...(event.data as Record<string, unknown>), toolNames: ["read", "evil"] } }
+				: event,
+		}));
+		const projection = projectJournal(entries);
+		assert.match(projection.corruptReason ?? "", /baseline digest mismatch/);
+	} finally {
+		await f.cleanup();
+	}
+});
 
 function recovered(f: Awaited<ReturnType<typeof fixture>>): PlanController {
 	return new PlanController({

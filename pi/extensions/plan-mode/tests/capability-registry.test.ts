@@ -57,3 +57,21 @@ test("PM4-P0-002 planningToolNames excludes never and unknown tools", () => {
 	assert.equal(names.includes("ctx_execute"), false);
 	assert.equal(names.includes("unknown"), false);
 });
+
+test("PM4-P0-002 npm source matching tolerates resolved version suffix but keeps path lock", () => {
+	const registry = testRegistry();
+	const versionedFff = registry.resolve("ffgrep", packageTool("ffgrep", "npm:@ff-labs/pi-fff@0.10.3", TOOL_PATHS.fff));
+	assert.equal(versionedFff.ok, true);
+
+	const versionedContext = registry.resolve("ctx_search", packageTool("ctx_search", "npm:context-mode@1.0.169", TOOL_PATHS.context));
+	assert.equal(versionedContext.ok, true);
+
+	const wrongPackage = registry.resolve("ffgrep", packageTool("ffgrep", "npm:evil@9.9.9", TOOL_PATHS.fff));
+	assert.equal(wrongPackage.ok, false);
+	assert.match(wrongPackage.reason, /source mismatch/);
+
+	// 来源放宽容忍版本后缀，但 path 仍必须精确匹配。
+	const wrongPath = registry.resolve("ffgrep", packageTool("ffgrep", "npm:@ff-labs/pi-fff@0.10.3", "evil/index.ts"));
+	assert.equal(wrongPath.ok, false);
+	assert.match(wrongPath.reason, /path mismatch/);
+});

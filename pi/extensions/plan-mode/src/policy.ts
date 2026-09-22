@@ -11,6 +11,13 @@ import {
 import type { ExecutionState, ResearchCapability, ResearchPermissionRecord } from "./domain.ts";
 import { usesPlanningPolicy } from "./state-machine.ts";
 
+/**
+ * 规划期 `parallel_tasks` 只读派发的角色白名单。
+ * 与 extensions/parallel-tasks/roles 的只读角色保持一致（probe/analyst/verifier/reviewer）；
+ * 可写角色（implementer 以及任何未来新增的可写角色）在规划期被拒绝，fail-closed。
+ */
+export const PLANNING_READONLY_DISPATCH_ROLES = new Set(["probe", "analyst", "verifier", "reviewer"]);
+
 export interface PolicyDecision {
 	readonly allow: boolean;
 	readonly capabilities?: readonly ResearchCapability[];
@@ -35,10 +42,21 @@ export interface ToolPolicyContext {
 	readonly cwd: string;
 	readonly readRoots?: readonly string[];
 	readonly managedTools?: readonly ManagedToolSource[];
+	/** 为 true 时实施期使用 orchestrator 硬门禁：主会话变更工具被拒绝，只允许读工具与派发/协调工具。 */
+	readonly orchestrator?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function dispatchedRoles(input: unknown): string[] {
+	if (!isRecord(input) || !Array.isArray(input.tasks)) return [];
+	const roles: string[] = [];
+	for (const task of input.tasks) {
+		if (isRecord(task) && typeof task.role === "string" && task.role.trim()) roles.push(task.role.trim());
+	}
+	return roles;
 }
 
 function nearestExistingPath(target: string): { existing: string; suffix: string[] } {
@@ -89,6 +107,9 @@ function managedToolAllowed(name: string, state: ExecutionState): boolean {
 		case "plan_step_complete":
 		case "plan_blocked":
 			return state.status === "implementing" || state.status === "stale";
+		case "plan_dispatch_step":
+		case "plan_apply_diff":
+			return state.status === "implementing";
 		default:
 			return false;
 	}
@@ -137,30 +158,41 @@ function evaluateReadPath(
 	return deny(`Read path escapes configured roots: ${target}`, entry);
 }
 
-export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
+/**
+ * 只读/派发策略：规划期与 orchestrator 实施期共用同一套 registry 判定。
+ * allowImplementerDispatch 为 true 时（orchestrator 实施期）允许 parallel_tasks 派发可写 implementer 角色；
+ * 为 false 时（规划期）只允许只读角色。
+ */
+function evaluateReadOnlyLike(context: ToolPolicyContext, allowImplementerDispatch: boolean): PolicyDecision {
 	const { state, toolName } = context;
-	const managed = context.managedTools?.find((candidate) => candidate.name === toolName);
-	if (managed) {
-		if (!validManagedToolSource(context.toolInfo, managed)) {
-			return deny(`Managed tool '${toolName}' source changed or cannot be verified`);
-		}
-		if (!managedToolAllowed(toolName, state)) {
-			return deny(`Managed tool '${toolName}' is not allowed while state=${state.status}`);
-		}
-		return { allow: true, reason: `Trusted managed tool '${toolName}'` };
-	}
-
-	// Plan Mode deliberately disengages for ordinary tools during implementation.
-	if (state.status === "inactive" || state.status === "implementing") {
-		return { allow: true, reason: state.status === "inactive" ? "Plan Mode is inactive" : "Implementation uses normal Pi permissions" };
-	}
-	if (!usesPlanningPolicy(state.status)) return deny(`Tool calls are disabled while state=${state.status}`);
-
 	const match = context.registry.resolve(toolName, context.toolInfo);
 	if (!match.ok || !match.entry || !match.sourceDigest) return deny(match.reason, match.entry);
 	const entry = match.entry;
+	if (allowImplementerDispatch) {
+		const readCapabilities = new Set<ResearchCapability>(["workspace.read", "metadata.read", "network.read"]);
+		const sideEffects = entry.capabilities.filter((capability) => !readCapabilities.has(capability));
+		if (sideEffects.length > 0) {
+			return deny(`Tool '${toolName}' has non-read orchestrator capabilities: ${sideEffects.join(", ")}`, entry);
+		}
+	}
+	if (toolName === "parallel_tasks") {
+		const roles = dispatchedRoles(context.input);
+		if (allowImplementerDispatch) {
+			if (roles.length === 0) {
+				return deny(`Tool 'parallel_tasks' requires at least one role while state=${state.status}`, entry);
+			}
+		} else {
+			const denied = roles.filter((role) => !PLANNING_READONLY_DISPATCH_ROLES.has(role));
+			if (denied.length > 0) {
+				return deny(`Tool 'parallel_tasks' may only dispatch read-only roles while state=${state.status}; denied role(s): ${denied.join(", ")}`, entry);
+			}
+			if (roles.length === 0) {
+				return deny(`Tool 'parallel_tasks' requires at least one read-only role while state=${state.status}`, entry);
+			}
+		}
+	}
 	if (entry.planning === "never") {
-		return deny(`Tool '${toolName}' is classified as ${entry.capabilities.join(", ")} and denied during planning`, entry);
+		return deny(`Tool '${toolName}' is classified as ${entry.capabilities.join(", ")} and denied during ${state.status}`, entry);
 	}
 	if (entry.planning === "confirm-per-plan") {
 		if (!state.planId) return deny(`Tool '${toolName}' needs a current plan before permission can be requested`, entry);
@@ -186,6 +218,35 @@ export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
 		normalizedPath: pathDecision?.normalizedPath,
 		sourceDigest: match.sourceDigest,
 	};
+}
+
+export function evaluateToolCall(context: ToolPolicyContext): PolicyDecision {
+	const { state, toolName } = context;
+	const managed = context.managedTools?.find((candidate) => candidate.name === toolName);
+	if (managed) {
+		if (!validManagedToolSource(context.toolInfo, managed)) {
+			return deny(`Managed tool '${toolName}' source changed or cannot be verified`);
+		}
+		if (!managedToolAllowed(toolName, state)) {
+			return deny(`Managed tool '${toolName}' is not allowed while state=${state.status}`);
+		}
+		return { allow: true, reason: `Trusted managed tool '${toolName}'` };
+	}
+
+	// Plan Mode deliberately disengages for ordinary tools during implementation
+	// unless the orchestrator hard gate is enabled.
+	if (state.status === "inactive") {
+		return { allow: true, reason: "Plan Mode is inactive" };
+	}
+	if (state.status === "implementing" && !context.orchestrator) {
+		return { allow: true, reason: "Implementation uses normal Pi permissions" };
+	}
+	if (state.status === "implementing" && context.orchestrator) {
+		return evaluateReadOnlyLike(context, true);
+	}
+	if (!usesPlanningPolicy(state.status)) return deny(`Tool calls are disabled while state=${state.status}`);
+
+	return evaluateReadOnlyLike(context, false);
 }
 
 export function calculatePolicyDigest(registry: CapabilityRegistry, managedSourcePath?: string): string {

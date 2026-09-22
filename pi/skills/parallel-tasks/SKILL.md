@@ -11,7 +11,7 @@ description: 何时把工作拆成并行子任务（parallel_tasks 工具），�
 它有两种子任务：
 
 - **只读角色**（`probe` / `analyst` / `verifier` / `reviewer`）：在仓库中调研、定位、核验、审查，不修改任何文件。
-- **写角色**（`implementer`）：在**隔离的 git worktree** 中写代码、跑测试，产出 diff 交给你审查后合并。
+- **写角色**（`implementer`）：在**隔离的 git worktree** 中写代码并产出 diff；主会话审查、应用后运行测试。
 
 ## 什么时候用
 
@@ -46,10 +46,10 @@ description: 何时把工作拆成并行子任务（parallel_tasks 工具），�
 | `analyst` | 只读 | 机制分析：读懂某个流程如何工作 | 带证据的机制说明 |
 | `verifier` | 只读 | 假设核验：判定一个具体假设是否成立 | 成立 / 不成立 / 证据不足 |
 | `reviewer` | 只读 | 代码审查：找出缺陷、风险、改进点 | 分档审查意见 |
-| `implementer` | 写 | 独立实现：在隔离 worktree 中写代码、跑测试 | 结论 + diff |
+| `implementer` | 写 | 独立实现：在隔离 worktree 中写代码 | 结论 + diff |
 
-只读角色只能使用 `read`/`grep`/`find`/`ls`/受白名单限制的 `bash`；`implementer` 额外有 `write`/`edit`，
-并运行在隔离的 git worktree 中，bash 有危险命令黑名单和越界写入拦截。
+只读角色只能使用 `read`/`grep`/`find`/`ls`/受白名单限制的 `bash`；`implementer` 使用 `read`/`grep`/`find`/`ls`/`write`/`edit`，
+不提供 `bash`，避免把 git worktree 的文件隔离误当成 OS 进程沙箱。验证由主会话应用 diff 后运行。
 
 ## 怎么写子任务描述
 

@@ -98,6 +98,8 @@ export interface ApprovalRecord {
 	readonly sessionId: string;
 	readonly branchEntryId: string | null;
 	readonly activeToolsDigest: string;
+	/** 为 true 时表示 orchestrator 硬门禁模式（主会话变更工具被拒绝，改动全部经子任务 worktree）。 */
+	readonly orchestrator?: boolean;
 }
 
 export type ResearchPermissionDecision = "allow" | "deny";
@@ -157,6 +159,8 @@ export interface ExecutionState {
 	readonly securityLevel: typeof SECURITY_LEVEL;
 	readonly ephemeralSession: boolean;
 	readonly updatedAt: string;
+	/** orchestrator 硬门禁模式：为 true 时实施期主会话变更工具被拒绝，改动全部经子任务 worktree。 */
+	readonly orchestrator?: boolean;
 }
 
 export type EvidenceKind = "tool-result" | "step-report";
@@ -277,6 +281,8 @@ export interface ActionEnvironment {
 	readonly activeToolsDigest?: string;
 	readonly baseline?: ToolBaselineRecord;
 	readonly importedFrom?: ImportedPlanRef;
+	/** orchestrator 硬门禁模式标志：为 true 时实施期只允许读工具与派发/协调工具。 */
+	readonly orchestrator?: boolean;
 }
 
 export function createInitialState(now = new Date().toISOString(), ephemeralSession = false): ExecutionState {

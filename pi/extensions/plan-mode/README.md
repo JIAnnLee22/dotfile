@@ -82,6 +82,10 @@ $PI_CODING_AGENT_DIR/plan-mode-policy.json
 
 网络/索引授权只在当前计划有效：TUI/RPC 首次调用弹一次确认；Print/JSON 无 UI 时拒绝。
 
+### 规划期只读派发
+
+规划期也允许来源锁定的 `parallel_tasks` 工具，但 policy 只放行只读角色（probe/analyst/verifier/reviewer），拒绝 implementer 与未知角色。这样主会话可以把调研批量派发到隔离子任务，避免规划期上下文膨胀。
+
 ## 实施工具事务
 
 用户选择实施或 resume 后：
@@ -103,6 +107,21 @@ $PI_CODING_AGENT_DIR/plan-mode-policy.json
 - 连续两次 settled 且步骤 revision 未变化时自动 pause。
 - `plan_blocked` 立即 pause 并切回 planning-safe 工具。
 - 最后步骤完成后请求最终总结，再恢复 baseline 和清理 widget。
+
+### 派发优先（软引导）
+
+实施期默认保留普通 Pi 权限，但注入“只统筹”指引：优先用 `plan_dispatch_step` 把当前步骤派发给 implementer 子任务（隔离 worktree），审查 diff、用 `plan_apply_diff` 落地、验证后再 `plan_step_complete`；琐碎改动才直接 edit/write。主会话只接触步骤汇总与 diff，避免实现细节撑爆上下文。
+
+## Orchestrator 模式（可选硬门禁）
+
+用 `--orchestrator` flag（或 `pi --plan --orchestrator`）开启。开启后实施期主会话的 `edit/write/bash` 等变更工具被 `tool_call` 门禁拒绝，只保留：
+
+- 来源锁定的读工具（read/grep/find/ls 等）
+- `parallel_tasks`（含 implementer 派发）
+- `plan_dispatch_step` / `plan_apply_diff`
+- `plan_step_complete` / `plan_blocked`
+
+所有改动必须经子任务 worktree，主会话只审查 diff 并 `git apply --index` 落地。ApprovalRecord 与审计标注 orchestrator 模式。这是对 v0.4“实施期普通权限”的可选增强，默认关闭，不弱化默认路径与 PM4-P0-007。顺序步骤的 worktree 基于 HEAD + 已落地的累计改动（`git diff --cached`），因此步骤间依赖可连续构建。
 
 ## 计划工件
 
@@ -159,7 +178,7 @@ baseline 在进入 planning 前持久化；reload 时不得把当前受限工具
 
 Plan Mode v2 不是 OS 沙箱。
 
-规划期只约束可信扩展集合中的模型工具调用；不能约束恶意扩展、扩展直接 Node I/O、`pi.exec()`、用户 `!`/`!!` 或 RPC direct bash。实施期明确恢复普通 Pi 权限，`edit/write/bash` 以当前用户权限运行，可能修改文件、启动子进程或访问网络。
+规划期只约束可信扩展集合中的模型工具调用；不能约束恶意扩展、扩展直接 Node I/O、`pi.exec()`、用户 `!`/`!!` 或 RPC direct bash。实施期明确恢复普通 Pi 权限，`edit/write/bash` 以当前用户权限运行，可能修改文件、启动子进程或访问网络。orchestrator 模式下实施期主会话变更工具被门禁拒绝，但 `plan_apply_diff` 仍会写主工作区、子任务 worktree 的隔离不是安全沙箱。
 
 强隔离任务应在容器、VM 或 OS sandbox 中运行整个 Pi。
 

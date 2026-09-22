@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ToolInfoLike } from "../src/capability-registry.ts";
-import { MANDATORY_IMPLEMENTATION_TOOLS, PLAN_MANAGED_TOOLS, ToolSession, type ToolRuntimePort } from "../src/tool-session.ts";
+import { CapabilityRegistry, defaultRegistryEntries, type ToolInfoLike } from "../src/capability-registry.ts";
+import { MANDATORY_IMPLEMENTATION_TOOLS, ORCHESTRATOR_MANAGED_TOOLS, ORCHESTRATOR_REQUIRED_TOOLS, PLAN_MANAGED_TOOLS, ToolSession, type ToolRuntimePort } from "../src/tool-session.ts";
 import { AGENT_DIR, TOOL_PATHS, builtin, packageTool, testRegistry } from "./helpers.ts";
 
 class FakePort implements ToolRuntimePort {
@@ -36,6 +36,7 @@ function tools(): ToolInfoLike[] {
 		builtin("powershell"),
 		packageTool("ffgrep", "npm:@ff-labs/pi-fff", TOOL_PATHS.fff),
 		packageTool("ctx_search", "npm:context-mode", TOOL_PATHS.context),
+		packageTool("ctx_index", "npm:context-mode", TOOL_PATHS.context),
 		...PLAN_MANAGED_TOOLS.map((name) => ({ name, sourceInfo: { source: "extension", path: "/agent/plan-mode/index.ts" } })),
 	];
 }
@@ -104,4 +105,49 @@ test("PM4-P0-010 restoreBaseline intersects with the current registry", () => {
 	assert.equal(narrowed.ok, true, "registered subset activates");
 	assert.ok(narrowed.missing.includes("gone-tool"), "unregistered tool reported");
 	assert.equal(narrowed.active.includes("gone-tool"), false);
+});
+
+function orchestratorRegistry() {
+	return new CapabilityRegistry([
+		...defaultRegistryEntries(AGENT_DIR),
+		{
+			name: "parallel_tasks",
+			capabilities: ["workspace.read"],
+			source: "local",
+			path: "/agent/extensions/parallel-tasks/index.ts",
+			planning: "always",
+			pathAdapter: "none",
+		},
+	]);
+}
+
+function orchestratorTools(): ToolInfoLike[] {
+	return [
+		...tools(),
+		{ name: "parallel_tasks", sourceInfo: { source: "local", path: "/agent/extensions/parallel-tasks/index.ts" } },
+		...ORCHESTRATOR_MANAGED_TOOLS.map((name) => ({ name, sourceInfo: { source: "extension", path: "/agent/plan-mode/index.ts" } })),
+	];
+}
+
+test("PM4-P0-007 orchestrator prepareOrchestration excludes edit/write/bash and includes dispatch/apply", () => {
+	const port = new FakePort(["read", "bash", "edit", "write"], orchestratorTools());
+	const session = new ToolSession(port, orchestratorRegistry());
+	const result = session.prepareOrchestration(baseline);
+	assert.equal(result.ok, true, result.reason);
+	assert.equal(result.active.includes("edit"), false);
+	assert.equal(result.active.includes("write"), false);
+	assert.equal(result.active.includes("bash"), false);
+	for (const name of ORCHESTRATOR_REQUIRED_TOOLS) {
+		assert.ok(result.active.includes(name), `missing orchestrator tool ${name}`);
+	}
+	assert.ok(result.active.includes("read"));
+	assert.ok(result.active.includes("ctx_search"));
+	assert.equal(result.active.includes("ctx_index"), false, "orchestrator must exclude managed.index.write tools");
+
+	// 派发工具来源锁定失败时 fail-closed
+	const badRegistry = new CapabilityRegistry([...defaultRegistryEntries(AGENT_DIR)]);
+	const badSession = new ToolSession(port, badRegistry);
+	const failed = badSession.prepareOrchestration(baseline);
+	assert.equal(failed.ok, false);
+	assert.match(failed.reason ?? "", /source verification/);
 });

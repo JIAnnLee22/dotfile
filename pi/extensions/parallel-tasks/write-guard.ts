@@ -1,44 +1,36 @@
 /// <reference path="../../types.d.ts" />
 /**
- * write-guard - implementer（可写）子任务的护栏
- *
- * 只在 parallel_tasks 派发的 writable 子进程中通过 `-e` 显式加载。
- * 子进程 cwd 是隔离的 git worktree，因此相对路径的文件操作天然落在 worktree 内；
- * 这里拦截明显的越界写入与危险命令，避免误改主仓库或执行破坏性操作。
- *
- * 注意：这不是完整沙箱，无法用字符串匹配穷尽所有 shell 逃逸；隔离的根本保证
- * 是 worktree 目录本身。护栏属于纵深防御，防止意外而非对抗恶意模型。
+ * implementer 子任务纵深护栏。真正的隔离边界是独立 git worktree；本扩展再拒绝
+ * 明显的越界路径、嵌套解释器、远程/破坏性命令和危险 git 子命令。
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const WORKTREE = process.env.PI_TASK_WORKTREE || null;
 
-/** 高危命令：系统破坏、远程 git、跨机传输、提权等。 */
 const BLOCKED_COMMANDS = new Set([
 	"sudo", "su", "doas", "mkfs", "mkswap", "swapon", "dd", "shutdown", "reboot",
 	"poweroff", "halt", "mount", "umount", "chown", "chattr", "setfacl", "crontab",
 	"ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "curl", "wget",
+	"bash", "sh", "dash", "zsh", "fish", "env", "xargs", "command", "builtin", "nohup",
+	"node", "bun", "python", "python3", "perl", "ruby",
 ]);
 
-/** 会改动远程或主仓库的 git 子命令。 */
 const BLOCKED_GIT_SUBCOMMANDS = new Set([
-	"push", "fetch", "pull", "clone", "worktree", "clean", "reset", "stash",
-	"rebase", "merge", "cherry-pick", "submodule",
+	"push", "fetch", "pull", "clone", "worktree", "clean", "reset", "stash", "commit",
+	"rebase", "merge", "cherry-pick", "submodule", "checkout", "switch", "branch", "tag", "remote", "config",
 ]);
 
-/** 危险模式：对根目录/家目录的破坏、对设备直接写、fork bomb 等。 */
 const DANGEROUS_PATTERNS: Array<[RegExp, string]> = [
 	[/\brm\s+(-[^\s]*r[^\s]*f[^\s]*|[^\s]*rf)\s+(\/|\~|$)/, "rm -rf 根目录或家目录"],
-	[/\brm\s+(-[^\s]*r[^\s]*f[^\s]*|[^\s]*rf)\s+\/(?!dev\/null)/, "rm -rf 绝对路径"],
 	[/\bchmod\s+-[^\s]*R[^\s]*\s+\//, "chmod -R 绝对路径"],
 	[/\bchown\s+-[^\s]*R[^\s]*\s+\//, "chown -R 绝对路径"],
 	[/\bdd\s+.*\bof=/i, "dd 写设备"],
 	[/:\s*\(\)\s*\{/, "疑似 fork bomb"],
 ];
 
-/** 解析文件工具调用里的路径参数。 */
 function toolPath(args: unknown): string | null {
 	if (!args || typeof args !== "object") return null;
 	const input = args as Record<string, unknown>;
@@ -49,113 +41,168 @@ function toolPath(args: unknown): string | null {
 	return null;
 }
 
-/** 判断某路径（按 worktree 解析）是否越出 worktree。 */
-function escapesWorktree(p: string): boolean {
-	if (!WORKTREE) return true;
-	const resolved = path.resolve(WORKTREE, p);
-	const rel = path.relative(WORKTREE, resolved);
-	return rel.startsWith("..") || path.isAbsolute(rel);
-}
-
-/** 从 shell 命令中提取形如 `/abs` 或 `~/...` 的绝对路径 token。 */
-function absolutePathTokens(command: string): string[] {
-	const home = process.env.HOME || "/root";
-	const tokens: string[] = [];
-	for (const raw of command.split(/\s+/)) {
-		let token = raw;
-		// 去掉包裹的引号，方便识别路径。
-		if (token.length >= 2 && ["'", '"'].includes(token[0]) && token.endsWith(token[0])) {
-			token = token.slice(1, -1);
-		}
-		if (token.startsWith("~/")) {
-			tokens.push(path.join(home, token.slice(2)));
-		} else if (token.startsWith("/")) {
-			tokens.push(token);
+function nearestExistingRealpath(target: string): string | null {
+	let probe = target;
+	const suffix: string[] = [];
+	while (true) {
+		try {
+			// lstat sees dangling symlinks; realpath below then rejects them instead of walking past them.
+			fs.lstatSync(probe);
+			break;
+		} catch {
+			const parent = path.dirname(probe);
+			if (parent === probe) return null;
+			suffix.unshift(path.basename(probe));
+			probe = parent;
 		}
 	}
-	return tokens;
+	try {
+		return path.join(fs.realpathSync.native(probe), ...suffix);
+	} catch {
+		return null;
+	}
 }
 
-/** 提取重定向目标（`>` / `>>` 后的路径），用于拦截越界写入。 */
+/** 词法路径和已存在父目录的 realpath 都必须保持在 worktree 内。 */
+export function escapesWorktree(candidate: string, worktree: string | null = WORKTREE): boolean {
+	if (!worktree) return true;
+	let rootReal: string;
+	try {
+		rootReal = fs.realpathSync.native(worktree);
+	} catch {
+		return true;
+	}
+	const lexical = path.resolve(rootReal, candidate.replace(/^~\//, `${process.env.HOME || "/root"}/`));
+	const lexicalRel = path.relative(rootReal, lexical);
+	if (lexicalRel.startsWith("..") || path.isAbsolute(lexicalRel)) return true;
+	const realTarget = nearestExistingRealpath(lexical);
+	if (!realTarget) return true;
+	const realRel = path.relative(rootReal, realTarget);
+	return realRel.startsWith("..") || path.isAbsolute(realRel);
+}
+
+interface ParsedCommand {
+	tokens: string[];
+	error?: string;
+}
+
+/** 足够保守的单命令 tokenizer；复合 shell 语法一律拒绝。 */
+function parseSingleCommand(command: string): ParsedCommand {
+	const tokens: string[] = [];
+	let token = "";
+	let quote: "'" | '"' | null = null;
+	let escaped = false;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (escaped) {
+			token += ch;
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) quote = null;
+			else {
+				if (quote === '"' && (ch === "`" || (ch === "$" && command[i + 1] === "("))) {
+					return { tokens: [], error: "implementer bash 不允许引号内的命令替换" };
+				}
+				token += ch;
+			}
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (ch === "\n" || ch === ";" || ch === "|" || ch === "&" || ch === "`") {
+			return { tokens: [], error: "implementer bash 只允许单个命令，不允许复合 shell 或命令替换" };
+		}
+		if (ch === "$" || ((ch === "<" || ch === ">") && command[i + 1] === "(")) {
+			return { tokens: [], error: "implementer bash 不允许变量、命令替换或进程替换" };
+		}
+		if (/\s/.test(ch)) {
+			if (token) tokens.push(token);
+			token = "";
+		} else {
+			token += ch;
+		}
+	}
+	if (quote || escaped) return { tokens: [], error: "命令包含未闭合的引号或转义" };
+	if (token) tokens.push(token);
+	return { tokens };
+}
+
 function redirectTargets(command: string): string[] {
 	const targets: string[] = [];
-	const re = /(?:^|\s)(?:[0-2]?>>?|>>)\s*("([^"]+)"|'([^']+)'|(\S+))/g;
-	let m: RegExpExecArray | null;
-	while ((m = re.exec(command)) !== null) {
-		targets.push(m[2] ?? m[3] ?? m[4]);
-	}
+	const re = /[0-2]?>>?\s*("([^"]+)"|'([^']+)'|([^\s;|&]+))/g;
+	let match: RegExpExecArray | null;
+	while ((match = re.exec(command)) !== null) targets.push(match[2] ?? match[3] ?? match[4]);
 	return targets;
 }
 
-function validateBash(command: string): string | null {
-	const tokens = command.trim().split(/\s+/).filter(Boolean);
+function tokenLooksLikePathEscape(token: string, worktree: string | null): boolean {
+	const rawValue = /^[A-Za-z_][A-Za-z0-9_]*=/.test(token) ? token.slice(token.indexOf("=") + 1) : token;
+	const cleaned = rawValue.replace(/^[0-2]?>>?/, "").replace(/[,:]$/, "");
+	if (!cleaned || cleaned === "/dev/null") return false;
+	if (/(^|\/)\.\.(\/|$)/.test(cleaned)) return true;
+	if (cleaned.startsWith("/") || cleaned.startsWith("~/")) return escapesWorktree(cleaned, worktree);
+	return false;
+}
+
+function gitSubcommand(tokens: string[], gitIndex: number): { sub?: string; error?: string } {
+	for (let i = gitIndex + 1; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (token === "--") return { sub: tokens[i + 1] };
+		if (token.startsWith("-")) return { error: `git 子命令前的全局选项 ${token} 在 implementer 中禁用` };
+		return { sub: token };
+	}
+	return {};
+}
+
+export function validateBash(command: string, worktree: string | null = WORKTREE): string | null {
+	const parsed = parseSingleCommand(command.trim());
+	if (parsed.error) return parsed.error;
+	const tokens = parsed.tokens;
 	if (tokens.length === 0) return "命令为空";
 
-	// 去掉前置环境变量赋值（FOO=bar cmd）。
 	let first = 0;
 	while (first < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[first])) first++;
 	if (first >= tokens.length) return "命令只有环境变量赋值";
-
-	const cmd = tokens[first].replace(/^.*[\\/]/, "");
-	if (BLOCKED_COMMANDS.has(cmd)) {
-		return `命令 \`${cmd}\` 会访问网络、提权或破坏系统，implementer 子任务禁用`;
-	}
-
-	for (const [pattern, reason] of DANGEROUS_PATTERNS) {
-		if (pattern.test(command)) return `检测到危险操作：${reason}`;
-	}
+	const cmd = path.basename(tokens[first]);
+	if (BLOCKED_COMMANDS.has(cmd)) return `命令 \`${cmd}\` 会启动嵌套解释器、访问网络、提权或破坏系统`;
+	for (const [pattern, reason] of DANGEROUS_PATTERNS) if (pattern.test(command)) return `检测到危险操作：${reason}`;
 
 	if (cmd === "git") {
-		const sub = tokens.slice(first).find((t) => !t.startsWith("-"));
-		if (sub && BLOCKED_GIT_SUBCOMMANDS.has(sub)) {
-			return `\`git ${sub}\` 会改动远程或主仓库，implementer 子任务禁用`;
-		}
+		const parsedGit = gitSubcommand(tokens, first);
+		if (parsedGit.error) return parsedGit.error;
+		if (parsedGit.sub && BLOCKED_GIT_SUBCOMMANDS.has(parsedGit.sub)) return `\`git ${parsedGit.sub}\` 在 implementer 子任务中禁用`;
 	}
 
-	// 越界写入检查：绝对路径重定向、以及 rm/mv/cp 等命令对 worktree 外绝对路径的操作。
+	for (const token of tokens) {
+		if (tokenLooksLikePathEscape(token, worktree)) return `命令参数 \`${token}\` 可能越出 worktree`;
+	}
 	for (const target of redirectTargets(command)) {
-		if (target.startsWith("/") || target.startsWith("~/")) {
-			if (escapesWorktree(target.replace(/^~\//, `${process.env.HOME || "/root"}/`))) {
-				return `重定向写入目标 \`${target}\` 越出 worktree`;
-			}
-		}
+		if (escapesWorktree(target, worktree)) return `重定向写入目标 \`${target}\` 越出 worktree`;
 	}
-
-	if (["rm", "mv", "cp", "touch", "mkdir", "tee", "install", "ln", "sed", "tar", "unzip"].includes(cmd)) {
-		for (const token of absolutePathTokens(command)) {
-			if (escapesWorktree(token)) {
-				return `命令 \`${cmd}\` 引用了 worktree 外的绝对路径 \`${token}\``;
-			}
-		}
-	}
-
 	return null;
 }
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event) => {
 		if (event.toolName === "write" || event.toolName === "edit" || event.toolName === "patch") {
-			const p = toolPath(event.input);
-			if (p && escapesWorktree(p)) {
-				return {
-					block: true,
-					reason: "目标路径越出隔离 worktree。implementer 子任务只能改动 worktree 内的文件。",
-				};
+			const target = toolPath(event.input);
+			if (!target || escapesWorktree(target)) {
+				return { block: true, reason: "目标路径缺失或越出隔离 worktree。implementer 只能修改 worktree 内文件。" };
 			}
 			return undefined;
 		}
-
 		if (event.toolName === "bash") {
-			const command = String(event.input.command ?? "");
-			const error = validateBash(command);
-			if (error) {
-				return {
-					block: true,
-					reason: `${error}。implementer 子任务在隔离 worktree 中运行，请把改动保持在 worktree 内。`,
-				};
-			}
+			const error = validateBash(String(event.input.command ?? ""));
+			if (error) return { block: true, reason: `${error}。请把操作保持在隔离 worktree 内。` };
 		}
-
 		return undefined;
 	});
 }

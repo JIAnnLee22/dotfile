@@ -42,7 +42,7 @@ export function reviewSummary(spec: PlanSpec): string {
 	const visible = spec.steps.slice(0, 10).map((step, index) => `${index + 1}. ${step.title}`).join("\n");
 	const hidden = spec.steps.length > 10 ? `\n… ${spec.steps.length - 10} more steps` : "";
 	const risks = spec.risks.length ? `\n\nRisks:\n${spec.risks.slice(0, 5).map((value) => `• ${value}`).join("\n")}` : "";
-	return `${spec.goal}\n\nSteps (${spec.steps.length}):\n${visible}${hidden}${risks}\n\nImplementation enables: ${MANDATORY_IMPLEMENTATION_TOOLS.join(", ")}\nAfter confirmation, ordinary tools use normal Pi permissions.`;
+	return `${spec.goal}\n\nSteps (${spec.steps.length}):\n${visible}${hidden}${risks}\n\nDefault implementation enables: ${MANDATORY_IMPLEMENTATION_TOOLS.join(", ")} and uses normal Pi permissions.\nWhen started with --orchestrator, agent edit/write/bash stay disabled and reviewed subtask diffs are applied through the orchestrator gate.`;
 }
 
 export async function chooseReviewDecision(ctx: ExtensionContext, spec: PlanSpec): Promise<ReviewDecision | undefined> {

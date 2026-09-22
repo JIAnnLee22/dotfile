@@ -40,7 +40,7 @@ import {
 } from "./legacy-v1.ts";
 import { projectJournal, researchPermissionKey, type SessionEntryLike } from "./journal.ts";
 import { assertTransition, isTerminal } from "./state-machine.ts";
-import { activeToolsDigest, MANDATORY_IMPLEMENTATION_TOOLS } from "./tool-session.ts";
+import { activeToolsDigest, MANDATORY_IMPLEMENTATION_TOOLS, ORCHESTRATOR_REQUIRED_TOOLS } from "./tool-session.ts";
 
 export interface AuditJournalWriter {
 	append(event: AuditEvent): Promise<void> | void;
@@ -434,9 +434,10 @@ export class PlanController {
 		const expected = this.requireExpected(request.expectedPlan);
 		const spec = this.requireV2Spec(expected);
 		const activeTools = [...new Set(environment.activeTools ?? [])];
-		const missing = MANDATORY_IMPLEMENTATION_TOOLS.filter((name) => !activeTools.includes(name));
+		const requiredTools = environment.orchestrator ? ORCHESTRATOR_REQUIRED_TOOLS : MANDATORY_IMPLEMENTATION_TOOLS;
+		const missing = requiredTools.filter((name) => !activeTools.includes(name));
 		if (missing.length > 0) {
-			throw new PlanControllerError("TOOL_UNAVAILABLE", `Implementation tool readback is missing: ${missing.join(", ")}`, true);
+			throw new PlanControllerError("TOOL_UNAVAILABLE", `${environment.orchestrator ? "Orchestrator" : "Implementation"} tool readback is missing: ${missing.join(", ")}`, true);
 		}
 		const digest = activeToolsDigest(activeTools);
 		if (!environment.activeToolsDigest || environment.activeToolsDigest !== digest) {
@@ -460,6 +461,7 @@ export class PlanController {
 			sessionId: environment.scope.sessionId,
 			branchEntryId: environment.scope.branchLeafId,
 			activeToolsDigest: digest,
+			...(environment.orchestrator ? { orchestrator: true } : {}),
 		};
 		await this.appendAudit("approval-created", request.actor, environment.scope, {
 			decision: "allow",
@@ -481,7 +483,10 @@ export class PlanController {
 				baselineId: this.baselineValue.baselineId,
 				currentStepId,
 				steps,
-				reason: `Implementation started at ${currentStepId} with verified active tools`,
+				orchestrator: environment.orchestrator,
+				reason: environment.orchestrator
+					? `Orchestrator implementation started at ${currentStepId}; main-session mutation tools suppressed`
+					: `Implementation started at ${currentStepId} with verified active tools`,
 			},
 			request.actor,
 			environment.scope,
@@ -791,6 +796,12 @@ export class PlanController {
 				digest,
 				data: { toolName, toolCallId },
 			});
+		});
+	}
+
+	async recordOrchestration(actor: Actor, scope: PlanScope, action: string, data?: unknown, digest?: string): Promise<void> {
+		await this.mutex.run(async () => {
+			await this.appendAudit(action, actor, scope, { decision: "none", data, digest });
 		});
 	}
 

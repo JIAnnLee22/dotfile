@@ -29,8 +29,16 @@ import { AUDIT_ENTRY_TYPE } from "./src/journal.ts";
 import { evaluateToolCall } from "./src/policy.ts";
 import { chooseReviewDecision, confirmImplementation, renderUserPlan, requestEditFeedback } from "./src/review-ui.ts";
 import { usesPlanningPolicy } from "./src/state-machine.ts";
-import { MANDATORY_IMPLEMENTATION_TOOLS, PLAN_MANAGED_TOOLS, ToolSession } from "./src/tool-session.ts";
+import { MANDATORY_IMPLEMENTATION_TOOLS, ORCHESTRATOR_MANAGED_TOOLS, PLAN_MANAGED_TOOLS, ToolSession } from "./src/tool-session.ts";
 import { buildPlanProgressLines } from "./src/ui.ts";
+import {
+	accumulatedPatch,
+	applyDiff,
+	buildStepTask,
+	currentStepInfo,
+	dispatchStepToSubtask,
+	revertAppliedDiff,
+} from "./src/orchestrator.ts";
 
 const CONTEXT_TYPE = "plan-mode/context-v2";
 const RESULT_TYPE = "plan-mode/action-result-v2";
@@ -38,8 +46,12 @@ const SUBMIT_TOOL = "plan_submit";
 const QUESTION_TOOL = "plan_question";
 const COMPLETE_TOOL = "plan_step_complete";
 const BLOCK_TOOL = "plan_blocked";
-const CONTROL_TOOLS = new Set([SUBMIT_TOOL, QUESTION_TOOL, COMPLETE_TOOL, BLOCK_TOOL]);
+const DISPATCH_TOOL = "plan_dispatch_step";
+const APPLY_TOOL = "plan_apply_diff";
+const CONTROL_TOOLS = new Set([SUBMIT_TOOL, QUESTION_TOOL, COMPLETE_TOOL, BLOCK_TOOL, DISPATCH_TOOL, APPLY_TOOL]);
 const EXTENSION_SOURCE = import.meta.filename;
+/** parallel-tasks 扩展入口，用于来源锁定规划期的 `parallel_tasks` 工具。 */
+const PARALLEL_TASKS_SOURCE = path.resolve(path.dirname(EXTENSION_SOURCE), "../parallel-tasks/index.ts");
 
 function actorChannel(ctx: ExtensionContext): ActorChannel {
 	return ctx.mode;
@@ -84,7 +96,9 @@ function formatTuiResult(result: PlanActionResult): string {
 		case "review":
 			return "Plan ready for review.";
 		case "implementing":
-			return "Plan implementation is running with normal Pi permissions.";
+			return result.state.orchestrator
+				? "Plan implementation is running in orchestrator-only mode."
+				: "Plan implementation is running with normal Pi permissions.";
 		case "paused":
 			return `Plan paused${result.state.reason ? `: ${result.state.reason}` : "."}`;
 		case "completed":
@@ -143,7 +157,18 @@ function expectedFromFlags(pi: ExtensionAPI): PlanRef | undefined {
 export default async function planModeExtension(pi: ExtensionAPI): Promise<void> {
 	const agentDir = path.resolve(process.env.PI_CODING_AGENT_DIR || getAgentDir());
 	const loadedConfig = await loadPolicyConfig(agentDir);
-	const registry = new CapabilityRegistry([...defaultRegistryEntries(agentDir), ...loadedConfig.entries]);
+	const registry = new CapabilityRegistry([
+		...defaultRegistryEntries(agentDir),
+		{
+			name: "parallel_tasks",
+			capabilities: ["workspace.read"],
+			source: "local",
+			path: PARALLEL_TASKS_SOURCE,
+			planning: "always",
+			pathAdapter: "none",
+		},
+		...loadedConfig.entries,
+	]);
 	const toolSession = new ToolSession(pi, registry);
 	const loop = new ExecutionLoop();
 	let controller: PlanController | undefined;
@@ -158,6 +183,15 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	let configNoticeShown = false;
 	let deckControlsWidget = false;
 	let deckModeListener: (() => void) | undefined;
+	let pendingOrchestratorPatch: { stepId: string; diff: string; digest: string; baseDigest: string } | undefined;
+	let appliedOrchestratorStepId: string | undefined;
+	let orchestratorAccumulatedDigest: string | undefined;
+
+	function resetOrchestratorRuntime(): void {
+		pendingOrchestratorPatch = undefined;
+		appliedOrchestratorStepId = undefined;
+		orchestratorAccumulatedDigest = undefined;
+	}
 
 	pi.registerFlag("plan", { description: "Start in Plan Mode v2", type: "boolean", default: false });
 	pi.registerFlag("plan-action", { description: "Non-interactive Plan Mode v2 action", type: "string" });
@@ -167,6 +201,11 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	pi.registerFlag("plan-hash", { description: "Expected immutable plan content hash", type: "string" });
 	pi.registerFlag("plan-from-version", { description: "Source version for --plan-action diff", type: "string" });
 	pi.registerFlag("plan-to-version", { description: "Target version for --plan-action diff", type: "string" });
+	pi.registerFlag("orchestrator", {
+		description: "Orchestrator-only implementation: main-session edit/write/bash are suppressed; all changes go through parallel_tasks worktrees",
+		type: "boolean",
+		default: false,
+	});
 
 	function ensureController(ctx: ExtensionContext): PlanController {
 		if (controller) return controller;
@@ -198,7 +237,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			case "planning":
 				return [QUESTION_TOOL, SUBMIT_TOOL];
 			case "implementing":
-				return [COMPLETE_TOOL, BLOCK_TOOL];
+				return [COMPLETE_TOOL, BLOCK_TOOL, DISPATCH_TOOL, APPLY_TOOL];
 			case "stale":
 				return [COMPLETE_TOOL, BLOCK_TOOL];
 			default:
@@ -214,7 +253,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			return { ok: result.ok, reason: result.reason };
 		}
 		if (state.status === "implementing") {
-			const result = toolSession.verifyImplementation();
+			const result = state.orchestrator ? toolSession.verifyOrchestration() : toolSession.verifyImplementation();
 			return { ok: result.ok, reason: result.reason };
 		}
 		return { ok: true };
@@ -267,7 +306,9 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			emitMessage(
 				ctx,
 				"plan-mode/safety-warning",
-				"PLAN_SAFETY_WARNING SAFETY_BOUNDARY_DEGRADED: RPC direct bash is outside planning tool_call policy; implementation uses normal Pi permissions",
+				result.state.orchestrator
+					? "PLAN_SAFETY_WARNING SAFETY_BOUNDARY_DEGRADED: orchestrator gates agent tool calls, but RPC direct bash remains outside tool_call policy"
+					: "PLAN_SAFETY_WARNING SAFETY_BOUNDARY_DEGRADED: RPC direct bash is outside planning tool_call policy; implementation uses normal Pi permissions",
 			);
 		}
 	}
@@ -279,7 +320,9 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		const step = current.spec?.steps.find((candidate) => candidate.id === state.currentStepId);
 		const content = decision.kind === "queue-final"
 			? `${decision.reason}\nGive the user a concise final result: changed files, validation performed, deviations, and remaining risks. Do not call ${COMPLETE_TOOL} again.`
-			: `${decision.reason}\nContinue the approved plan from the current step${step ? ` ${step.id}: ${step.title}` : ""}. Ordinary tools now use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when the step is done; call ${BLOCK_TOOL} for a real blocker.`;
+			: state.orchestrator
+				? `${decision.reason}\n[ORCHESTRATOR] Continue the approved plan from the current step${step ? ` ${step.id}: ${step.title}` : ""}. Main-session edit/write/bash are suppressed: dispatch this step with ${DISPATCH_TOOL} (isolated worktree), review the diff, apply it with ${APPLY_TOOL}, verify, then call ${COMPLETE_TOOL}; call ${BLOCK_TOOL} for a real blocker.`
+				: `${decision.reason}\nContinue the approved plan from the current step${step ? ` ${step.id}: ${step.title}` : ""}. Prefer dispatching this step to an implementer subtask via ${DISPATCH_TOOL}, review the diff, apply it with ${APPLY_TOOL}, verify, then call ${COMPLETE_TOOL}; trivial edits may be done directly. Call ${BLOCK_TOOL} for a real blocker.`;
 		pi.sendMessage({ customType: "plan-mode/continue-v2", content, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 	}
 
@@ -294,6 +337,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 				if (!restored.ok && ctx.hasUI) ctx.ui.notify(restored.reason ?? "Some baseline tools are unavailable", "warning");
 			}
 			await current.archive({ channel: "system", id: "plan-cleanup" }, scopeFor(ctx), reason);
+			resetOrchestratorRuntime();
 			loop.reset();
 			updateUI(ctx);
 		} finally {
@@ -315,6 +359,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 
 	async function startWithGoal(ctx: ExtensionContext, goal: string): Promise<PlanActionResult> {
 		const current = ensureController(ctx);
+		resetOrchestratorRuntime();
 		const planId = current.newOpaqueId();
 		const baseline = toolSession.captureBaseline(planId, scopeFor(ctx), current.newOpaqueId(), new Date().toISOString());
 		const result = await dispatch(ctx, "start", { goal: goal.trim(), baseline });
@@ -372,7 +417,34 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		if (!baseline) {
 			return resultError(current, "implement", { code: "TOOL_UNAVAILABLE", message: "Persisted tool baseline is unavailable", retryable: true });
 		}
-		const prepared = toolSession.prepareImplementation(baseline);
+		const orchestrator = current.state.orchestrator ?? (pi.getFlag("orchestrator") === true);
+		if (orchestrator) {
+			const accumulated = accumulatedPatch(ctx.cwd);
+			if (!accumulated.ok) {
+				return resultError(current, "implement", { code: "TOOL_UNAVAILABLE", message: accumulated.error ?? "Unable to inspect git index", retryable: true });
+			}
+			const digest = sha256(accumulated.patch ?? "");
+			const persistedDigest = [...current.events]
+				.reverse()
+				.find((event) => event.action === "orchestrator-index-baseline" && event.planRef?.planId === current.state.planId)?.digest;
+			const expectedDigest = orchestratorAccumulatedDigest ?? persistedDigest;
+			if (expectedDigest === undefined && (accumulated.patch ?? "").trim()) {
+				return resultError(current, "implement", {
+					code: "INVALID_STATE",
+					message: "Orchestrator mode requires a clean git index at first start/resume; commit or unstage unrelated changes first",
+					retryable: true,
+				});
+			}
+			if (expectedDigest !== undefined && digest !== expectedDigest) {
+				return resultError(current, "implement", { code: "INVALID_STATE", message: "Git index changed outside the orchestrator", retryable: true });
+			}
+			orchestratorAccumulatedDigest = digest;
+			pendingOrchestratorPatch = undefined;
+			appliedOrchestratorStepId = undefined;
+		} else {
+			resetOrchestratorRuntime();
+		}
+		const prepared = orchestrator ? toolSession.prepareOrchestration(baseline) : toolSession.prepareImplementation(baseline);
 		if (!prepared.ok) {
 			updateUI(ctx);
 			return resultError(current, "implement", {
@@ -386,7 +458,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		const result = await dispatch(
 			ctx,
 			action,
-			{ activeTools: prepared.active, activeToolsDigest: prepared.activeDigest },
+			{ activeTools: prepared.active, activeToolsDigest: prepared.activeDigest, orchestrator },
 			effectiveExpected,
 			actor,
 		);
@@ -557,7 +629,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	}
 
 	pi.registerCommand("plan", {
-		description: "Plan read-only, review once, then implement continuously with normal Pi tools",
+		description: "Plan read-only, review once, then implement continuously (normal tools or --orchestrator gate)",
 		handler: handleCommand,
 	});
 
@@ -651,6 +723,10 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		],
 		parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const current = ensureController(ctx);
+			if (current.state.orchestrator && appliedOrchestratorStepId !== current.state.currentStepId) {
+				throw new Error(`Orchestrator step ${current.state.currentStepId ?? "unknown"} has not completed a bound dispatch/apply cycle`);
+			}
 			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
 			const result = await dispatch(ctx, "complete_step", { note: params.summary }, undefined, modelActor);
 			if (!result.ok) throw new Error(formatResult(result));
@@ -687,10 +763,160 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		},
 	});
 
+	pi.registerTool({
+		name: DISPATCH_TOOL,
+		label: "Dispatch current plan step to an implementer subtask",
+		description:
+			"把当前计划步骤打包成 implementer 子任务，在隔离的 git worktree 中实现并返回 diff 供审查。" +
+			"只用于实施期：主会话只审查 diff，用 plan_apply_diff 落地，运行验证后 plan_step_complete。",
+		promptGuidelines: [
+			"实施期优先用 plan_dispatch_step 把当前步骤派发给 implementer 子任务，而不是主会话直接改文件。",
+			"审查返回的 diff 后用 plan_apply_diff 落地，运行验证，再 plan_step_complete。",
+		],
+		parameters: Type.Object({
+			instructions: Type.Optional(Type.String({ maxLength: 8192, description: "额外实现要求，会追加到步骤描述中" })),
+		}),
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			const current = ensureController(ctx);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			if (current.state.status !== "implementing") throw new Error(`${DISPATCH_TOOL} is available only during implementation`);
+			const spec = current.spec;
+			if (!spec) throw new Error("No PlanSpec is available");
+			const info = currentStepInfo(spec, current.state);
+			if ("error" in info) throw new Error(info.error);
+			const base = accumulatedPatch(ctx.cwd);
+			if (!base.ok) throw new Error(base.error ?? "Unable to read accumulated changes");
+			const baseDigest = sha256(base.patch ?? "");
+			if (current.state.orchestrator && baseDigest !== orchestratorAccumulatedDigest) {
+				throw new Error("Git index changed outside the orchestrator after implementation started");
+			}
+			pendingOrchestratorPatch = undefined;
+			appliedOrchestratorStepId = undefined;
+			const task = buildStepTask(info.step, info.index) + (params.instructions ? `\n\n额外要求：${params.instructions}` : "");
+			const onProgress = (live: readonly { status?: string }[]) => {
+				const running = live.filter((r) => r.status !== "finished").length;
+				onUpdate?.({ content: [{ type: "text", text: `步骤派发中：${live.length - running}/${live.length} 完成` }] });
+			};
+			const outcome = await dispatchStepToSubtask({
+				cwd: ctx.cwd,
+				provider: ctx.model?.provider,
+				signal,
+				onProgress,
+				task,
+				basePatch: base.patch || undefined,
+			});
+			const successful = outcome.results.filter(
+				(result) => result.exitCode === 0 && result.stopReason !== "error" && result.stopReason !== "aborted" && typeof result.diff === "string",
+			);
+			const stepId = current.state.currentStepId;
+			const dispatched = successful.length === 1 ? successful[0] : undefined;
+			const dispatchOk = !outcome.error && !!stepId && !!dispatched;
+			await current.recordOrchestration(modelActor, scopeFor(ctx), "step-dispatched", {
+				stepId,
+				basePatchDigest: baseDigest,
+				ok: dispatchOk,
+				changedFiles: outcome.results.map((r) => r.changedFiles ?? []).flat(),
+			});
+			if (!dispatchOk || !stepId || !dispatched) {
+				return {
+					content: [{ type: "text", text: `步骤派发失败：${outcome.error ?? "implementer 未返回唯一、完整的可审查 diff"}\n\n${outcome.integration}` }],
+					details: { results: outcome.results },
+					isError: true,
+				};
+			}
+			if (!dispatched.diff.trim()) {
+				appliedOrchestratorStepId = stepId;
+				return {
+					content: [{ type: "text", text: `implementer 已完成步骤且没有文件变更。可在确认验证结果后调用 ${COMPLETE_TOOL}。\n\n${outcome.integration}` }],
+					details: { results: outcome.results, noChanges: true },
+				};
+			}
+			const digest = sha256(dispatched.diff);
+			pendingOrchestratorPatch = { stepId, diff: dispatched.diff, digest, baseDigest };
+			return {
+				content: [{
+					type: "text",
+					text: `步骤已派发给 implementer 子任务。请审查以下完整 diff（digest=${digest}），原样传给 ${APPLY_TOOL} 落地，再调用 ${COMPLETE_TOOL}。\n\n${outcome.integration}`,
+				}],
+				details: { results: outcome.results, digest },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: APPLY_TOOL,
+		label: "Apply a reviewed diff to the working tree",
+		description:
+			"把审查通过的 diff 用 git apply --check + --index 落地到主工作区（含新文件），失败不半应用。只用于实施期。",
+		parameters: Type.Object({
+			diff: Type.String({ minLength: 1, description: "要应用的统一 diff（来自 implementer 子任务的输出）" }),
+		}),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const current = ensureController(ctx);
+			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
+			if (current.state.status !== "implementing") throw new Error(`${APPLY_TOOL} is available only during implementation`);
+			const pending = pendingOrchestratorPatch;
+			if (!pending || pending.stepId !== current.state.currentStepId || pending.diff !== params.diff || pending.digest !== sha256(params.diff)) {
+				return {
+					content: [{ type: "text", text: "diff 与当前步骤最近一次成功派发的完整补丁不匹配；已拒绝应用。" }],
+					details: { expectedDigest: pending?.digest, actualDigest: sha256(params.diff) },
+					isError: true,
+				};
+			}
+			const currentBase = accumulatedPatch(ctx.cwd);
+			if (!currentBase.ok || sha256(currentBase.patch ?? "") !== pending.baseDigest) {
+				return {
+					content: [{ type: "text", text: "派发后 git index 已变化；为避免应用到错误基线，已拒绝补丁。" }],
+					details: { expectedBaseDigest: pending.baseDigest },
+					isError: true,
+				};
+			}
+			const outcome = applyDiff(ctx.cwd, params.diff);
+			if (!outcome.ok) {
+				await current.recordOrchestration(modelActor, scopeFor(ctx), "diff-applied", {
+					stepId: pending.stepId,
+					ok: false,
+					digest: outcome.digest,
+				});
+				return {
+					content: [{ type: "text", text: `diff 应用失败：${outcome.error}。主工作区未被修改。` }],
+					details: outcome,
+					isError: true,
+				};
+			}
+			const updatedBase = accumulatedPatch(ctx.cwd);
+			if (!updatedBase.ok) {
+				const rollback = revertAppliedDiff(ctx.cwd, params.diff);
+				throw new Error(`${updatedBase.error ?? "Unable to verify accumulated patch after apply"}${rollback.ok ? "；diff 已回滚" : `；${rollback.error}`}`);
+			}
+			const updatedDigest = sha256(updatedBase.patch ?? "");
+			try {
+				await current.recordOrchestration(modelActor, scopeFor(ctx), "orchestrator-index-baseline", {
+					stepId: pending.stepId,
+					changedFiles: outcome.changedFiles,
+					patchDigest: outcome.digest,
+				}, updatedDigest);
+			} catch (error) {
+				const rollback = revertAppliedDiff(ctx.cwd, params.diff);
+				pendingOrchestratorPatch = undefined;
+				appliedOrchestratorStepId = undefined;
+				throw new Error(`Orchestrator audit persistence failed: ${error instanceof Error ? error.message : String(error)}${rollback.ok ? "; diff 已回滚" : `；${rollback.error}`}`);
+			}
+			// 只有补丁和对应审计事件都成功后才发布可完成 marker。
+			pendingOrchestratorPatch = undefined;
+			orchestratorAccumulatedDigest = updatedDigest;
+			appliedOrchestratorStepId = pending.stepId;
+			return {
+				content: [{ type: "text", text: `已应用与派发记录绑定的 diff。改动文件：${outcome.changedFiles.join(", ") || "（无）"}。请调用 ${COMPLETE_TOOL}。` }],
+				details: outcome,
+			};
+		},
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		const current = ensureController(ctx);
 		const evaluatedRevision = current.state.revision;
-		const managedTools = PLAN_MANAGED_TOOLS.map((name) => ({ name, sourcePath: EXTENSION_SOURCE }));
+		const managedTools = [...PLAN_MANAGED_TOOLS, ...ORCHESTRATOR_MANAGED_TOOLS].map((name) => ({ name, sourcePath: EXTENSION_SOURCE }));
 		const evaluateLatest = () => evaluateToolCall({
 			state: current.state,
 			registry,
@@ -701,6 +927,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			cwd: ctx.cwd,
 			readRoots: [ctx.cwd],
 			managedTools,
+			orchestrator: current.state.orchestrator,
 		});
 		let decision = evaluateLatest();
 		if (decision.permissionRequired && decision.sourceDigest && decision.capabilities) {
@@ -817,21 +1044,24 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		if (state.status === "inactive") return;
 		const spec = current.spec;
 		const step = spec?.steps.find((candidate) => candidate.id === state.currentStepId);
+		const orchestratorMode = state.orchestrator === true;
 		const content = state.status === "planning"
-			? "Plan read-only. Use only source-verified research tools. Ask material questions with plan_question. Submit goal, decisions, steps(title/actions/files/validation), and risks with plan_submit. Do not declare capability/path grants."
+			? "Plan read-only. Use only source-verified research tools. Batch research into parallel_tasks read-only subtasks (probe/analyst/verifier/reviewer) to keep the main context small; use read/grep for trivial lookups. Ask material questions with plan_question. Submit goal, decisions, steps(title/actions/files/validation), and risks with plan_submit. Do not declare capability/path grants."
 			: state.status === "awaiting_input"
 				? `Wait for clarification: ${state.pendingInput?.prompt ?? "input required"}`
 				: state.status === "review"
 					? "The plan is awaiting an explicit review decision. Do not implement or self-approve."
-					: state.status === "implementing" && step
-						? `Implement ${step.id}: ${step.title}. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}. Ordinary tools use normal Pi permissions. Call ${COMPLETE_TOOL} with a concise summary when done, or ${BLOCK_TOOL} for a real blocker.`
-						: state.status === "completed"
-							? "All steps are complete. Give the final changed-files, validation, deviations, and risks summary now."
-							: state.status === "paused"
-								? "Plan implementation is paused. Do not mutate until the user confirms /plan resume."
-								: state.status === "stale"
-									? `Plan integrity is stale: ${state.reason ?? "unknown error"}. Report only; do not implement.`
-									: "Plan tracking is terminal; do not perform plan work.";
+					: state.status === "implementing" && step && orchestratorMode
+						? `[ORCHESTRATOR] Implement ${step.id}: ${step.title} via subtasks only — main-session edit/write/bash are suppressed. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}. Dispatch this step with ${DISPATCH_TOOL} (isolated worktree), review the returned diff, apply it with ${APPLY_TOOL}, verify, then call ${COMPLETE_TOOL}; call ${BLOCK_TOOL} for a real blocker.`
+						: state.status === "implementing" && step
+							? `Implement ${step.id}: ${step.title}. Actions: ${step.actions.join("; ")}. Files: ${step.files.join(", ") || "not specified"}. Validation: ${step.validation.join("; ") || "verify appropriately"}. Prefer dispatching this step to an implementer subtask via ${DISPATCH_TOOL} (isolated worktree), review the diff, apply it with ${APPLY_TOOL}, verify, then call ${COMPLETE_TOOL}; trivial edits may be done directly with edit/write. Call ${BLOCK_TOOL} for a real blocker.`
+							: state.status === "completed"
+								? "All steps are complete. Give the final changed-files, validation, deviations, and risks summary now."
+								: state.status === "paused"
+									? `Plan implementation is paused${orchestratorMode ? " (orchestrator mode)" : ""}. Do not mutate until the user confirms /plan resume.`
+									: state.status === "stale"
+										? `Plan integrity is stale: ${state.reason ?? "unknown error"}. Report only; do not implement.`
+										: "Plan tracking is terminal; do not perform plan work.";
 		return {
 			message: {
 				customType: CONTEXT_TYPE,

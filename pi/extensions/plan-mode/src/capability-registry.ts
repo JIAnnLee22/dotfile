@@ -87,6 +87,31 @@ function sameEntry(left: RegistryEntry, right: RegistryEntry): boolean {
 	return canonicalJson(left) === canonicalJson(right);
 }
 
+/**
+ * 归一化 npm 来源为包身份（去掉可选的精确版本后缀）。
+ * `npm:<name>[@<version>]` -> `npm:<name>`；scoped 包名中的 `@scope` 不受影响。
+ */
+function npmIdentity(source: string): string | null {
+	if (!source.startsWith("npm:")) return null;
+	const spec = source.slice("npm:".length);
+	if (!spec) return null;
+	const versionAt = spec.lastIndexOf("@");
+	const name = versionAt > 0 ? spec.slice(0, versionAt) : spec;
+	return `npm:${name}`;
+}
+
+/**
+ * 来源匹配：registry 条目锁定 npm 包身份（无版本），而运行时 `sourceInfo.source`
+ * 可能是 settings 里带精确版本的字符串（如 `npm:context-mode@1.0.169`）。
+ * 只要包身份一致即视为来源匹配；path 仍被独立锁定，因此放宽版本后缀不会削弱来源锁定。
+ */
+function sourceMatches(expected: string, actual: string | undefined): boolean {
+	if (actual === expected) return true;
+	if (typeof actual !== "string" || !expected.startsWith("npm:")) return false;
+	const expectedIdentity = npmIdentity(expected);
+	return expectedIdentity !== null && npmIdentity(actual) === expectedIdentity;
+}
+
 function sourceDigest(entry: RegistryEntry, info: ToolInfoLike): string {
 	return sha256(
 		canonicalJson({
@@ -254,7 +279,7 @@ export class CapabilityRegistry {
 		if (!info || info.name !== name || !info.sourceInfo) {
 			return { ok: false, entry, reason: `Tool '${name}' source metadata is unavailable` };
 		}
-		if (info.sourceInfo.source !== entry.source) {
+		if (!sourceMatches(entry.source, info.sourceInfo.source)) {
 			return {
 				ok: false,
 				entry,
@@ -283,6 +308,18 @@ export class CapabilityRegistry {
 			if (match.ok && match.entry?.planning !== "never") names.push(tool.name);
 		}
 		return names;
+	}
+
+	/** Orchestrator 主会话只暴露纯读取能力；managed.index.write 等副作用能力即使规划期可确认也排除。 */
+	orchestrationReadToolNames(tools: readonly ToolInfoLike[]): string[] {
+		const readCapabilities = new Set<ResearchCapability>(["workspace.read", "metadata.read", "network.read"]);
+		return tools.flatMap((tool) => {
+			const match = this.resolve(tool.name, tool);
+			const entry = match.entry;
+			return match.ok && entry && entry.planning !== "never" && entry.capabilities.every((capability) => readCapabilities.has(capability))
+				? [tool.name]
+				: [];
+		});
 	}
 
 	digest(): string {

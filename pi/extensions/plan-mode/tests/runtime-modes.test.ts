@@ -15,7 +15,7 @@ function run(args: string[], input?: string) {
 			encoding: "utf8",
 			input,
 			timeout: 30_000,
-			env: { ...process.env, PI_PLAN_MODE_HOME: planHome },
+			env: { ...process.env, PI_CODING_AGENT_DIR: planHome, PI_PLAN_MODE_HOME: planHome },
 		});
 	} finally {
 		fs.rmSync(planHome, { recursive: true, force: true });
@@ -34,7 +34,7 @@ async function runRpcBarePlan(goal: string) {
 	try {
 		const child = spawn(pi, ["--no-session", "-e", extension, "--mode", "rpc"], {
 			stdio: ["pipe", "pipe", "pipe"],
-			env: { ...process.env, PI_PLAN_MODE_HOME: planHome },
+			env: { ...process.env, PI_CODING_AGENT_DIR: planHome, PI_PLAN_MODE_HOME: planHome },
 		});
 		child.stdout.setEncoding("utf8");
 		child.stderr.setEncoding("utf8");
@@ -98,6 +98,13 @@ test("PM4-P0-014 Print loads the extension and emits a stable text action result
 	const result = run(["-p", "/plan status"]);
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(result.stdout, "", "Pi reserves Print stdout for assistant text");
+	assert.match(result.stderr, /^PLAN_ACTION_OK state=inactive .*security=agent-tools-only/m);
+});
+
+test("PM4-P0-014 orchestrator flag registers and loads the extension cleanly", () => {
+	// 裸 boolean flag 放在命令后，避免 Pi CLI 把后续位置参数当作 flag 值。
+	const result = run(["-p", "/plan status", "--orchestrator"]);
+	assert.equal(result.status, 0, result.stderr);
 	assert.match(result.stderr, /^PLAN_ACTION_OK state=inactive .*security=agent-tools-only/m);
 });
 

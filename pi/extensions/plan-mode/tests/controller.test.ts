@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs/promises";
 import test from "node:test";
-import { activeToolsDigest } from "../src/tool-session.ts";
+import { activeToolsDigest, ORCHESTRATOR_REQUIRED_TOOLS } from "../src/tool-session.ts";
 import {
 	actor,
 	baseline,
@@ -85,6 +85,32 @@ test("PM4-P0-006 model cannot approve its own implementation", async () => {
 		assert.equal(result.ok, false);
 		assert.equal(result.error?.code, "APPROVAL_REQUIRED");
 		assert.equal(result.state.status, "review");
+	} finally {
+		await f.cleanup();
+	}
+});
+
+test("PM4-P0-007 orchestrator implement accepts orchestrator tool set and records orchestrator mode", async () => {
+	const f = await fixture();
+	try {
+		const ref = await prepareReview(f.controller, f.scope);
+		const orchestratorTools = [...ORCHESTRATOR_REQUIRED_TOOLS, "read", "grep", "find", "ls"];
+		// 普通实施集（含 edit/write/bash）不应满足 orchestrator 要求的工具。
+		const wrong = await f.controller.dispatch(
+			request("implement", ref),
+			environment(f.scope, { activeTools: ["edit", "write", "bash"], activeToolsDigest: activeToolsDigest(["edit", "write", "bash"]), orchestrator: true }),
+		);
+		assert.equal(wrong.error?.code, "TOOL_UNAVAILABLE");
+		assert.equal(f.controller.state.status, "review");
+
+		const result = await f.controller.dispatch(
+			request("implement", ref),
+			environment(f.scope, { activeTools: orchestratorTools, activeToolsDigest: activeToolsDigest(orchestratorTools), orchestrator: true }),
+		);
+		assert.equal(result.ok, true);
+		assert.equal(result.state.status, "implementing");
+		assert.equal(result.state.orchestrator, true);
+		assert.equal(f.controller.approval?.orchestrator, true);
 	} finally {
 		await f.cleanup();
 	}

@@ -1,4 +1,4 @@
-import { canonicalJson } from "./canonical.ts";
+import { canonicalJson, sha256 } from "./canonical.ts";
 import {
 	AUDIT_SCHEMA,
 	STATE_SCHEMA,
@@ -77,7 +77,8 @@ function isToolBaseline(value: unknown): value is ToolBaselineRecord {
 		isRecord(value) &&
 		value.schema === "dev.pi.plan-tool-baseline/v2" &&
 		typeof value.baselineId === "string" &&
-		Array.isArray(value.toolNames)
+		Array.isArray(value.toolNames) &&
+		value.toolNames.every((name) => typeof name === "string")
 	);
 }
 
@@ -145,12 +146,24 @@ export function projectJournal(entries: readonly SessionEntryLike[]): JournalPro
 	const baselines = new Map<string, ToolBaselineRecord>();
 	const evidence = new Map<string, EvidenceRecord>();
 	let state: ExecutionState | undefined;
+	let corruptReason = scanned.corruptReason;
 	for (const event of scanned.v2) {
 		if (event.action === "approval-created" && isApprovalRecord(event.data)) approvals.set(event.data.approvalId, event.data);
 		if (event.action === "research-permission-decided" && isResearchPermission(event.data)) {
 			permissions.set(permissionKey(event.data), event.data);
 		}
-		if (event.action === "tool-baseline-captured" && isToolBaseline(event.data)) baselines.set(event.data.baselineId, event.data);
+		if (event.action === "tool-baseline-captured") {
+			if (!isToolBaseline(event.data)) {
+				corruptReason = "Malformed tool-baseline-captured audit data";
+				break;
+			}
+			const expectedDigest = sha256(canonicalJson([...new Set(event.data.toolNames)]));
+			if (event.digest !== expectedDigest) {
+				corruptReason = `Tool baseline digest mismatch for ${event.data.baselineId}`;
+				break;
+			}
+			baselines.set(event.data.baselineId, event.data);
+		}
 		if (event.action === "evidence-recorded" && isEvidenceRecord(event.data)) evidence.set(event.data.evidenceId, event.data);
 		if (event.action === "state-committed" && isExecutionState(event.state)) state = structuredClone(event.state);
 	}
@@ -167,7 +180,7 @@ export function projectJournal(entries: readonly SessionEntryLike[]): JournalPro
 		events: scanned.v2,
 		legacy: scanned.legacy.length > 0 ? { state: legacyState, events: scanned.legacy } : undefined,
 		maxSequence: scanned.maxSequence,
-		corruptReason: scanned.corruptReason,
+		corruptReason,
 	};
 }
 
