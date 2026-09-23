@@ -7,6 +7,7 @@ export { formatTime, formatPercent, BaseOverlay } from "./usage/framework.ts";
 export type { UsageWindow, UsageReport, UsageProvider } from "./usage/framework.ts";
 export { fetchGoUsage, getOpencodeGoApiKey, opencodeGoProvider } from "./usage/providers/opencode-go.ts";
 export { chatgptProvider } from "./usage/providers/chatgpt.ts";
+export { antigravityProvider } from "./usage/providers/antigravity.ts";
 
 // 为了让 `pi -e ./extensions/usage-overlay.ts` 仍能工作，提供空的 extension 工厂
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

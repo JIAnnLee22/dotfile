@@ -1,7 +1,11 @@
 # 敏感信息 - API密钥和认证令牌
 auth.json
 agent/auth.json
+antigravity-accounts.json
+agent/antigravity-accounts.json
 custom_provider.json
+web-search-cache
+.pi
 
 # 会话记录 - 自动生成
 sessions/

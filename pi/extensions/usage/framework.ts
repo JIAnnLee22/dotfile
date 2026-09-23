@@ -53,6 +53,19 @@ export abstract class BaseOverlay {
 
 // ── Usage 抽象 ──
 
+export class ProviderNotLoggedInError extends Error {
+	constructor(providerTitle: string, hint?: string) {
+		super(`未登录 ${providerTitle}${hint ? `，请先 ${hint}` : ""}`);
+		this.name = "ProviderNotLoggedInError";
+	}
+}
+
+export function isNotLoggedInError(err: unknown): boolean {
+	if (err instanceof ProviderNotLoggedInError) return true;
+	const msg = err instanceof Error ? err.message : String(err);
+	return /未登录|未找到.*(?:apiKey|凭证|授权|credentials)|not logged in|no credentials/i.test(msg);
+}
+
 export interface UsageSnapshot {
 	label: string;
 	/** 剩余可用百分比 0-100 */
@@ -71,6 +84,7 @@ export interface UsageReport {
 export interface UsageProvider {
 	id: string;
 	title: string;
+	isConfigured?(ctx: ExtensionCommandContext): Promise<boolean> | boolean;
 	fetch(ctx: ExtensionCommandContext): Promise<UsageReport>;
 }
 
@@ -155,7 +169,7 @@ export class MultiUsageOverlay extends BaseOverlay {
 	private tui: TUI;
 	private ctx: ExtensionCommandContext;
 	private providers: UsageProvider[];
-	private results: Map<string, { report?: UsageReport; error?: string }> = new Map();
+	private results: Map<string, { report?: UsageReport; error?: string; notLoggedIn?: boolean }> = new Map();
 	private frame = 0;
 	private interval: ReturnType<typeof setInterval> | null = null;
 	private done: () => void;
@@ -171,7 +185,14 @@ export class MultiUsageOverlay extends BaseOverlay {
 			this.results.set(p.id, {});
 			p.fetch(ctx).then(
 				(r) => { this.results.set(p.id, { report: r }); this.tui.requestRender(); },
-				(err) => { this.results.set(p.id, { error: err instanceof Error ? err.message : String(err) }); this.tui.requestRender(); },
+				(err) => {
+					const notLoggedIn = isNotLoggedInError(err);
+					this.results.set(p.id, {
+						error: err instanceof Error ? err.message : String(err),
+						notLoggedIn,
+					});
+					this.tui.requestRender();
+				},
 			);
 		}
 	}
@@ -197,25 +218,36 @@ export class MultiUsageOverlay extends BaseOverlay {
 		lines.push(border("│") + padLine(th.fg("accent", "Usage Dashboard")) + border("│"));
 		lines.push(border("│") + padLine("") + border("│"));
 
-		for (const p of this.providers) {
+		const visibleProviders = this.providers.filter((p) => {
 			const res = this.results.get(p.id);
-			lines.push(border("│") + padLine(th.fg("accent", `— ${p.title} —`)) + border("│"));
-			if (!res || (!res.report && !res.error)) {
-				lines.push(border("│") + padLine(`  请求中: ${th.fg("warning", spin)}`) + border("│"));
-			} else if (res.error) {
-				lines.push(border("│") + padLine(`  失败: ${th.fg("error", truncateToWidth(res.error, innerW - 6))}`) + border("│"));
-			} else if (res.report) {
-				for (const s of res.report.snapshots) {
-					lines.push(border("│") + padLine(`  ${s.label}: ${th.fg("accent", formatPercent(s.percent, s.resetsAt))}`) + border("│"));
-				}
-				if (res.report.extra) {
-					lines.push(border("│") + padLine(th.fg("dim", `  ${res.report.extra}`)) + border("│"));
-				}
-				if (res.report.snapshots.length === 0) {
-					lines.push(border("│") + padLine(th.fg("dim", "  无数据")) + border("│"));
-				}
-			}
+			return !res?.notLoggedIn;
+		});
+
+		if (visibleProviders.length === 0) {
+			lines.push(border("│") + padLine(th.fg("dim", "  暂无已登录的 Provider")) + border("│"));
+			lines.push(border("│") + padLine(th.fg("dim", "  请先通过 /login 登录对应服务")) + border("│"));
 			lines.push(border("│") + padLine("") + border("│"));
+		} else {
+			for (const p of visibleProviders) {
+				const res = this.results.get(p.id);
+				lines.push(border("│") + padLine(th.fg("accent", `— ${p.title} —`)) + border("│"));
+				if (!res || (!res.report && !res.error)) {
+					lines.push(border("│") + padLine(`  请求中: ${th.fg("warning", spin)}`) + border("│"));
+				} else if (res.error) {
+					lines.push(border("│") + padLine(`  失败: ${th.fg("error", truncateToWidth(res.error, innerW - 6))}`) + border("│"));
+				} else if (res.report) {
+					for (const s of res.report.snapshots) {
+						lines.push(border("│") + padLine(`  ${s.label}: ${th.fg("accent", formatPercent(s.percent, s.resetsAt))}`) + border("│"));
+					}
+					if (res.report.extra) {
+						lines.push(border("│") + padLine(th.fg("dim", `  ${res.report.extra}`)) + border("│"));
+					}
+					if (res.report.snapshots.length === 0) {
+						lines.push(border("│") + padLine(th.fg("dim", "  无数据")) + border("│"));
+					}
+				}
+				lines.push(border("│") + padLine("") + border("│"));
+			}
 		}
 
 		lines.push(border("│") + padLine(th.fg("dim", " Press Esc/q to close")) + border("│"));

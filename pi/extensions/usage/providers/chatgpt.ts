@@ -1,5 +1,12 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { UsageProvider, UsageReport, UsageSnapshot } from "../framework.ts";
+import { ProviderNotLoggedInError, type UsageProvider, type UsageReport, type UsageSnapshot } from "../framework.ts";
+
+function agentDir(): string {
+	return process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+}
 
 // 借鉴 @narumitw/pi-codex-usage 的鉴权与解析逻辑，但不依赖该插件
 // 仅通过 Pi 的 openai-codex OAuth 直接请求 wham/usage
@@ -54,6 +61,22 @@ async function resolveChatGPTAuth(ctx: ExtensionCommandContext): Promise<Record<
 		if (!hasHeader(headers, "User-Agent")) headers["User-Agent"] = "pi-usage-overlay";
 		if (hasHeader(headers, "Authorization")) return headers;
 	}
+
+	// 回退读取 auth.json 中 openai-codex 凭证
+	const authPath = join(agentDir(), "auth.json");
+	if (existsSync(authPath)) {
+		try {
+			const auth = JSON.parse(readFileSync(authPath, "utf8")) as Record<string, unknown>;
+			const codex = auth["openai-codex"] as Record<string, unknown> | undefined;
+			if (codex && typeof codex.access === "string" && codex.access) {
+				return {
+					Authorization: `Bearer ${codex.access}`,
+					"User-Agent": "pi-usage-overlay",
+				};
+			}
+		} catch {}
+	}
+
 	return undefined;
 }
 
@@ -142,12 +165,22 @@ function normalizePayload(payload: RateLimitPayload): UsageReport {
 	return { title: "ChatGPT Usage", snapshots, extra, raw: payload };
 }
 
+export async function isChatGPTConfigured(ctx: ExtensionCommandContext): Promise<boolean> {
+	try {
+		const headers = await resolveChatGPTAuth(ctx);
+		return !!headers;
+	} catch {
+		return false;
+	}
+}
+
 export const chatgptProvider: UsageProvider = {
 	id: "chatgpt",
 	title: "ChatGPT Usage",
+	isConfigured: isChatGPTConfigured,
 	async fetch(ctx): Promise<UsageReport> {
 		const headers = await resolveChatGPTAuth(ctx);
-		if (!headers) throw new Error("未找到 ChatGPT OAuth 凭证：请先 /login 登录 openai-codex (ChatGPT Plus/Pro)，或检查 auth.json 中 openai-codex 为 oauth 类型");
+		if (!headers) throw new ProviderNotLoggedInError("ChatGPT", "/login openai-codex");
 
 		const res = await fetchWithTimeout(CODEX_USAGE_URL, { headers }, TIMEOUT_MS);
 		const text = await res.text();
