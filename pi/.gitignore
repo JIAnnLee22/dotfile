@@ -46,3 +46,5 @@ Thumbs.db
 .pi-subagents/
 missions/
 run-history.jsonl
+
+models-store.json
