@@ -27,7 +27,7 @@
   "warnings": {
     "anthropicExtraUsage": false
   },
-  "fullscreenCopyOnSelect": false,
+  "fullscreenCopyOnSelect": true,
   "treeFilterMode": "default",
   "enableInstallTelemetry": true,
   "showCacheMissNotices": true
