@@ -26,5 +26,9 @@
   "tuiMode": "fullscreen",
   "warnings": {
     "anthropicExtraUsage": false
-  }
+  },
+  "fullscreenCopyOnSelect": false,
+  "treeFilterMode": "default",
+  "enableInstallTelemetry": true,
+  "showCacheMissNotices": true
 }
