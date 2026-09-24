@@ -1,7 +1,0 @@
-while true; do
-    # Log stderror to a file 
-    scrollwm 2> ~/.dwm.log
-    # No error logging
-    #scrollwm >/dev/null 2>&1
-done
-
