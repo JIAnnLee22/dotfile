@@ -1,19 +1,19 @@
 # 优化清单
 
-先读 `~/.config/pi/settings.json` 看当前实际值，再动手改。官方字段定义以 docs/settings.md 为准（本机路径 `/home/jiannlee22/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/docs/settings.md`）。
+先读 `$PI_CODING_AGENT_DIR/settings.json` 看当前实际值，再动手改。官方字段定义以当前 Pi 安装包的 `docs/settings.md` 为准。
 
-## 当前配置解读（2025-08 快照）
+## 当前配置解读（迁移后，实际值仍以 settings.json 为准）
 
 | 字段 | 当前值 | 含义 |
 |------|--------|------|
-| `packages` | `@ff-labs/pi-fff`、`pi-web-access`、`context-mode` | 已装扩展包 |
+| `packages` | fff、web-access、context-mode、todos-tool、pi-antigravity、pi-plan、pi-loop-mode、pi-subagent | 社区扩展包；版本以 settings.json 为准 |
 | `skills` | `["./skills"]` | 自定义 skills 目录 |
-| `defaultProvider` / `defaultModel` | `opencode-go` / `deepseek-v4-flash` | 默认 provider 与模型 |
-| `defaultThinkingLevel` | `max` | 思考强度（off/minimal/low/medium/high/xhigh/max） |
+| `defaultProvider` / `defaultModel` | `openai-codex` / `gpt-6-sol` | 默认 provider 与模型 |
+| `defaultThinkingLevel` | `xhigh` | 思考强度（off/minimal/low/medium/high/xhigh/max） |
 | `theme` | `dark` | 主题 |
 | `quietStartup` | `true` | 隐藏启动头 |
 | `collapseChangelog` | `true` | 更新后显示精简 changelog |
-| `hideThinkingBlock` | `true` | 输出中隐藏思考块 |
+| `hideThinkingBlock` | `false` | 显示思考块 |
 | `tuiMode` | `fullscreen` | 全屏 TUI（`regular` 为传统模式） |
 | `fullscreenScrollbar` | `hidden` | 全屏滚动条策略（auto/always/hidden） |
 | `outputPad` / `editorPaddingX` | `0` | 输出/编辑器内边距 |
@@ -32,7 +32,7 @@
 
 **Skills 与扩展**
 - 新能力优先做成 skill（`~/.config/pi/skills/<name>/SKILL.md`，frontmatter 需 name+description；description 决定何时自动加载，要写具体）。
-- 计划模式、parallel-tasks 的本地扩展在 `~/.config/pi/extensions/`；新扩展开发参考 `.pi-reference/pi-coding-agent/examples/extensions/` 与官方 docs/extensions.md。
+- 计划/循环/并行任务改用社区扩展；本地只保留 `extensions/usage/` 和兼容入口。切换包前核对 Pi 版本、peer 依赖、权限边界与持久化格式。
 - `/skill:名称` 可强制加载 skill；`enableSkillCommands` 控制此命令注册（默认 true）。
 
 **使用习惯**
@@ -43,7 +43,7 @@
 
 ## 安全与维护
 
-- `auth.json` 含凭据，勿入库；.gitignore 已排除。
+- `auth.json` 含凭据，勿入库；`web-search.json` 只保存非敏感的 `toolActivation: eager`，不要把密钥写入跟踪文件。
 - 修改配置前备份或依赖 git 仓库（dotfile/pi）可回滚；改动后重启 pi 生效（`tuiMode` 等个别项即时生效）。
 - 敏感路径（`.env`、`.git`、`node_modules`）操作前确认。
 - 更新 pi 本体：`npm -g update @earendil-works/pi-coding-agent`（或按安装方式）；升级后看 changelog 确认兼容性。

@@ -1,6 +1,6 @@
 {
   "collapseChangelog": true,
-  "defaultModel": "gpt-6-sol",
+  "defaultModel": "gpt-6.1-sol",
   "defaultProjectTrust": "ask",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "xhigh",
@@ -13,10 +13,13 @@
   "outputPad": 0,
   "packages": [
     "npm:@ff-labs/pi-fff@0.10.3",
-    "npm:pi-web-access@0.22.0",
+    "npm:pi-web-access@0.33.0",
     "npm:context-mode@1.0.169",
     "npm:@gamaraan/todos-tool@0.2.4",
-    "npm:pi-antigravity@0.8.0"
+    "npm:pi-antigravity@0.8.0",
+    "npm:@bacnh85/pi-plan@0.16.5",
+    "npm:pi-loop-mode@2.5.4",
+    "npm:@parke.dev/pi-subagent@0.8.0"
   ],
   "quietStartup": true,
   "skills": [
