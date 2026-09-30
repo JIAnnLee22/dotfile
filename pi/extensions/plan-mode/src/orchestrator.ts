@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import { sha256 } from "./canonical.ts";
 import type { ExecutionState, PlanSpec, PlanStepSpec } from "./domain.ts";
-import { buildIntegration, dispatchTasks, failed, type TaskResult } from "../../parallel-tasks/src/dispatch.ts";
+import { dispatchTasks, failed, type TaskResult } from "../../parallel-tasks/src/dispatch.ts";
 import { loadRoles, ROLES_DIR } from "../../parallel-tasks/src/roles.ts";
 
 export interface GitRun {
@@ -103,15 +103,23 @@ export function currentStepInfo(spec: PlanSpec, state: ExecutionState): CurrentS
 
 export function buildStepTask(step: PlanStepSpec, index: number): string {
 	const files = step.files.join(", ") || "（未指定，请自行判断应改动的文件）";
-	const validation = step.validation.join("；") || "运行相关测试、类型检查或构建验证";
 	return [
 		`实现计划步骤 S${index + 1}「${step.title}」。`,
 		`操作：${step.actions.join("；")}`,
 		`涉及文件：${files}`,
-		`验证：${validation}`,
+		"验收标准（派发器会在你的 worktree 内依次执行，全部通过才向主会话提交 diff）：",
+		...step.validation.map((command, i) => `${i + 1}. ${command}`),
 		"",
-		"在隔离 worktree 中完成代码改动并运行验证；只改动本步骤涉及的文件，不越界；产出结论 + diff。",
+		"在隔离 worktree 中完成代码改动；只改动本步骤涉及的文件，不越界。无需自己运行命令，派发器会执行以上验收项；未通过时须告知主会话，不能声称完成。",
 	].join("\n");
+}
+
+/** 状态投影不包含子任务输出或补丁，避免每次进度更新重复发送大块上下文。 */
+export function formatDispatchProgress(live: readonly TaskResult[], elapsedSeconds: number): string {
+	const done = live.filter((result) => result.status === "finished").length;
+	const active = live.find((result) => result.status === "running");
+	const phase = active?.currentAction ? ` · ${active.currentAction.replace(/\s+/g, " ").slice(0, 100)}` : active ? " · 子会话处理中" : "";
+	return `步骤派发：${done}/${live.length} 完成${phase} · ${elapsedSeconds}s`;
 }
 
 export interface DispatchStepInput {
@@ -121,6 +129,8 @@ export interface DispatchStepInput {
 	onProgress?: (live: readonly TaskResult[]) => void;
 	task: string;
 	basePatch?: string;
+	/** 用户已批准计划中当前步骤的逐项可执行验收命令。 */
+	validation: readonly string[];
 }
 
 export interface DispatchStepOutcome {
@@ -131,6 +141,9 @@ export interface DispatchStepOutcome {
 
 /** 把单个 implementer 子任务派发到隔离 worktree，返回 diff 汇总供主会话审查。 */
 export async function dispatchStepToSubtask(input: DispatchStepInput): Promise<DispatchStepOutcome> {
+	if (input.validation.length === 0 || input.validation.some((command) => !command.trim() || command.length > 2048)) {
+		return { results: [], integration: "", error: "当前步骤缺少有效的可执行验收命令；请先更新计划再派发，不能无验收提交 diff" };
+	}
 	const roles = loadRoles(ROLES_DIR);
 	const implementer = roles.find((role) => role.name === "implementer");
 	if (!implementer || !implementer.writable) {
@@ -142,11 +155,12 @@ export async function dispatchStepToSubtask(input: DispatchStepInput): Promise<D
 		signal: input.signal,
 		onProgress: input.onProgress,
 		basePatch: input.basePatch,
+		verificationCommands: input.validation,
 	});
 	const anyOk = results.some((result) => !failed(result));
 	return {
 		results,
-		integration: buildIntegration(results),
+		integration: "", // 不把子会话详细输出复制进主会话上下文。
 		...(anyOk ? {} : { error: "implementer 子任务执行失败" }),
 	};
 }

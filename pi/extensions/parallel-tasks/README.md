@@ -37,6 +37,18 @@
 
 也可以执行 `/parallel-roles` 查看角色列表。
 
+### 任务面板与结果查看
+
+参考 [tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents) 的实时任务 UI：TUI 中在编辑器上方展示正在运行、排队和已完成的任务；活动任务显示动画状态、当前工具/动作、轮数、工具次数、token 数和耗时。面板最多显示 8 行，优先显示运行和排队任务，剩余任务合并成摘要。工具结果仍按原方式展开查看；结束后可执行 `/parallel-results`，选择本次会话最近一批任务，滚动查看完整结论与可写角色 diff（`↑/↓`、`PgUp/PgDn`、`Esc`）。切换会话后历史记录会清空；Print/JSON/RPC 不显示 TUI 面板或交互查看器，原有汇总结果不变。
+
+可选 `maxConcurrency` 指定本批并发数（1–4，默认 4），例如：
+
+```json
+{"maxConcurrency": 2, "tasks": [{"role": "probe", "task": "定位 src/auth 下的入口和调用点。"}]}
+```
+
+保持同步派发：`parallel_tasks` 等所有子任务完成才返回汇总；不是上游的后台 Agent、对话恢复或工作流引擎。插件保存在此仓库本地，不依赖上游 npm 安装。
+
 ## 角色
 
 - `probe`：快速定位文件、符号、调用点，返回路径和行号。
@@ -54,7 +66,7 @@
 - 只读角色：`write` / `edit` 被禁用并由 `readonly-guard.ts` 再次拦截；`bash` 用只读命令白名单，拒绝重定向、管道、命令拼接、解释器与写入类命令。
 - `implementer` 角色：运行在 `git worktree add --detach <tmp> HEAD` 创建的隔离目录中，与主仓库和其他并行任务文件级隔离；仅提供读工具与 `write/edit`，不提供 `bash`，避免把 worktree 文件隔离误当成进程沙箱。主仓库的未提交改动不会进入 worktree，显式 `basePatch` 除外。
 - 子任务不会直接改主仓库；`implementer` 的改动以 diff 形式返回，由主会话审查后用 `git apply`（或逐文件）落地。
-- 最多 8 个任务，最多同时运行 4 个。
+- 最多 8 个任务，默认同时运行 4 个；可按批次调低到 1–4 个。
 
 ## 结果整合
 

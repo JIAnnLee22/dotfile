@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Key, truncateToWidth } from "@earendil-works/pi-tui";
+import { Key, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { PlanArtifactStore, renderLegacyPlanMarkdown, renderPlanMarkdown } from "./src/artifact-store.ts";
 import { canonicalJson, sha256 } from "./src/canonical.ts";
@@ -37,6 +37,7 @@ import {
 	buildStepTask,
 	currentStepInfo,
 	dispatchStepToSubtask,
+	formatDispatchProgress,
 	revertAppliedDiff,
 } from "./src/orchestrator.ts";
 
@@ -186,6 +187,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 	let pendingOrchestratorPatch: { stepId: string; diff: string; digest: string; baseDigest: string } | undefined;
 	let appliedOrchestratorStepId: string | undefined;
 	let orchestratorAccumulatedDigest: string | undefined;
+	let dispatchInFlight = false;
 
 	function resetOrchestratorRuntime(): void {
 		pendingOrchestratorPatch = undefined;
@@ -682,7 +684,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		description: "Submit a concise PlanSpec v2 for one review decision. IDs, versions, hashes and permissions are generated internally.",
 		promptGuidelines: [
 			"Use plan_submit after research and material clarification are complete.",
-			"Plan steps should state concrete actions, informational files, and validation; do not declare capabilities or path grants.",
+			"Plan steps should state concrete actions, informational files, and validation; do not declare capabilities or path grants. To use plan_dispatch_step, each step needs at least one executable validation command; the worktree dispatcher runs every command and withholds the diff if any fails.",
 		],
 		parameters: Type.Object({
 			goal: Type.String({ minLength: 1, maxLength: 16_384 }),
@@ -723,6 +725,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		],
 		parameters: Type.Object({ summary: Type.String({ minLength: 1, maxLength: 4096 }) }),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (dispatchInFlight) throw new Error("子会话尚在实施或验收，不能报告步骤完成");
 			const current = ensureController(ctx);
 			if (current.state.orchestrator && appliedOrchestratorStepId !== current.state.currentStepId) {
 				throw new Error(`Orchestrator step ${current.state.currentStepId ?? "unknown"} has not completed a bound dispatch/apply cycle`);
@@ -767,16 +770,19 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 		name: DISPATCH_TOOL,
 		label: "Dispatch current plan step to an implementer subtask",
 		description:
-			"把当前计划步骤打包成 implementer 子任务，在隔离的 git worktree 中实现并返回 diff 供审查。" +
-			"只用于实施期：主会话只审查 diff，用 plan_apply_diff 落地，运行验证后 plan_step_complete。",
+			"把当前计划步骤及验收命令交给 implementer；在隔离 worktree 验收全部通过后才返回 diff。" +
+			"只用于实施期：主会话审查 diff，用 plan_apply_diff 落地，再复核并调用 plan_step_complete。",
 		promptGuidelines: [
 			"实施期优先用 plan_dispatch_step 把当前步骤派发给 implementer 子任务，而不是主会话直接改文件。",
-			"审查返回的 diff 后用 plan_apply_diff 落地，运行验证，再 plan_step_complete。",
+			"子任务验收失败时不提交补丁；通过后审查返回的 diff，用 plan_apply_diff 落地，复核再调用 plan_step_complete。",
 		],
 		parameters: Type.Object({
 			instructions: Type.Optional(Type.String({ maxLength: 8192, description: "额外实现要求，会追加到步骤描述中" })),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			if (dispatchInFlight) throw new Error("已有步骤派发正在执行；请等待子会话和验收完成");
+			dispatchInFlight = true;
+			try {
 			const current = ensureController(ctx);
 			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
 			if (current.state.status !== "implementing") throw new Error(`${DISPATCH_TOOL} is available only during implementation`);
@@ -793,20 +799,46 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			pendingOrchestratorPatch = undefined;
 			appliedOrchestratorStepId = undefined;
 			const task = buildStepTask(info.step, info.index) + (params.instructions ? `\n\n额外要求：${params.instructions}` : "");
-			const onProgress = (live: readonly { status?: string }[]) => {
-				const running = live.filter((r) => r.status !== "finished").length;
-				onUpdate?.({ content: [{ type: "text", text: `步骤派发中：${live.length - running}/${live.length} 完成` }] });
+			const startedAt = Date.now();
+			const revision = current.state.revision;
+			const stillCurrent = () => controller === current && current.state.status === "implementing" &&
+				current.state.revision === revision && current.state.currentStepId === info.step.id && !signal?.aborted;
+			let lastLive: Parameters<NonNullable<Parameters<typeof dispatchStepToSubtask>[0]["onProgress"]>>[0] = [];
+			let lastUpdate = "";
+			const onProgress = (live: typeof lastLive) => {
+				lastLive = live;
+				const text = formatDispatchProgress(live, Math.floor((Date.now() - startedAt) / 1000));
+				if (text === lastUpdate) return;
+				lastUpdate = text;
+				onUpdate?.({ content: [{ type: "text", text }], details: { progress: text } });
+				if (ctx.hasUI) ctx.ui.setStatus("plan-dispatch", text);
+				if (live.length > 0) pi.events.emit("operations-deck:tasks", {
+					results: live.map((r) => ({ ...r, usage: { ...r.usage }, task: r.label, output: "", stderr: "", diff: undefined, verification: undefined })),
+					running: live.filter((r) => r.status !== "finished").length,
+				});
 			};
-			const outcome = await dispatchStepToSubtask({
-				cwd: ctx.cwd,
-				provider: ctx.model?.provider,
-				signal,
-				onProgress,
-				task,
-				basePatch: base.patch || undefined,
-			});
+			onUpdate?.({ content: [{ type: "text", text: "步骤派发：准备子会话 worktree…" }], details: { progress: "步骤派发：准备子会话 worktree…" } });
+			if (ctx.hasUI) ctx.ui.setStatus("plan-dispatch", "步骤派发：准备子会话 worktree…");
+			const heartbeat = setInterval(() => onProgress(lastLive), 10_000);
+			let outcome: Awaited<ReturnType<typeof dispatchStepToSubtask>>;
+			try {
+				outcome = await dispatchStepToSubtask({
+					cwd: ctx.cwd,
+					provider: ctx.model?.provider,
+					signal,
+					onProgress,
+					task,
+					validation: info.step.validation,
+					basePatch: base.patch || undefined,
+				});
+			} finally {
+				clearInterval(heartbeat);
+				if (ctx.hasUI) ctx.ui.setStatus("plan-dispatch", undefined);
+			}
+			if (!stillCurrent()) throw new Error("派发期间计划状态变化或操作取消；已丢弃子会话补丁");
 			const successful = outcome.results.filter(
-				(result) => result.exitCode === 0 && result.stopReason !== "error" && result.stopReason !== "aborted" && typeof result.diff === "string",
+				(result) => result.exitCode === 0 && result.stopReason === "stop" && !result.errorMessage &&
+					result.verification?.length === info.step.validation.length && result.verification.every((check) => check.ok) && typeof result.diff === "string",
 			);
 			const stepId = current.state.currentStepId;
 			const dispatched = successful.length === 1 ? successful[0] : undefined;
@@ -817,18 +849,21 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 				ok: dispatchOk,
 				changedFiles: outcome.results.map((r) => r.changedFiles ?? []).flat(),
 			});
+			if (!stillCurrent()) throw new Error("审计期间计划状态变化或操作取消；已丢弃子会话补丁");
+			const verification = outcome.results[0]?.verification?.map(({ command, ok, exitCode }) => ({ command, ok, exitCode }));
+			const summary = verification?.map((check) => `${check.ok ? "通过" : "失败"}：${check.command}${check.ok ? "" : `（${check.output}）`}`).join("\n") ?? "无验收记录";
 			if (!dispatchOk || !stepId || !dispatched) {
 				return {
-					content: [{ type: "text", text: `步骤派发失败：${outcome.error ?? "implementer 未返回唯一、完整的可审查 diff"}\n\n${outcome.integration}` }],
-					details: { results: outcome.results },
+					content: [{ type: "text", text: `步骤派发失败：${outcome.results[0]?.errorMessage ?? outcome.error ?? "子任务未完成验收"}。未提交可应用 diff。\n${summary}` }],
+					details: { verification, error: outcome.results[0]?.errorMessage, status: "failed" },
 					isError: true,
 				};
 			}
 			if (!dispatched.diff.trim()) {
 				appliedOrchestratorStepId = stepId;
 				return {
-					content: [{ type: "text", text: `implementer 已完成步骤且没有文件变更。可在确认验证结果后调用 ${COMPLETE_TOOL}。\n\n${outcome.integration}` }],
-					details: { results: outcome.results, noChanges: true },
+					content: [{ type: "text", text: `步骤验收通过，无文件变更。请复核后调用 ${COMPLETE_TOOL}。\n${summary}` }],
+					details: { verification, noChanges: true, status: "passed" },
 				};
 			}
 			const digest = sha256(dispatched.diff);
@@ -836,10 +871,23 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			return {
 				content: [{
 					type: "text",
-					text: `步骤已派发给 implementer 子任务。请审查以下完整 diff（digest=${digest}），原样传给 ${APPLY_TOOL} 落地，再调用 ${COMPLETE_TOOL}。\n\n${outcome.integration}`,
+					text: `子任务验收全部通过；审查以下 diff（digest=${digest}），原样传给 ${APPLY_TOOL} 落地，复核后调用 ${COMPLETE_TOOL}。\n${summary}\n\n${dispatched.diff}`,
 				}],
-				details: { results: outcome.results, digest },
+				details: { verification, digest, changedFiles: dispatched.changedFiles, status: "passed" },
 			};
+			} finally {
+				dispatchInFlight = false;
+			}
+		},
+		renderCall(_args, theme) {
+			return new Text(theme.fg("toolTitle", theme.bold("plan_dispatch_step ")) + theme.fg("accent", "子会话实施与验收"), 0, 0);
+		},
+		renderResult(result, _options, theme) {
+			const details = result.details as { progress?: string; status?: string; changedFiles?: string[] } | undefined;
+			const status = result.isError && !details?.status ? "子会话派发异常 · 未提交补丁" : details?.progress ?? (details?.status === "passed"
+				? `验收通过 · ${details.changedFiles?.length ?? 0} 个文件；待主会话审查`
+				: details?.status === "failed" ? "子会话或验收失败 · 未提交补丁" : "准备派发");
+			return new Text(theme.fg(result.isError || details?.status === "failed" ? "error" : "accent", status), 0, 0);
 		},
 	});
 
@@ -852,6 +900,7 @@ export default async function planModeExtension(pi: ExtensionAPI): Promise<void>
 			diff: Type.String({ minLength: 1, description: "要应用的统一 diff（来自 implementer 子任务的输出）" }),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			if (dispatchInFlight) throw new Error("子会话尚在实施或验收，不能应用补丁");
 			const current = ensureController(ctx);
 			const modelActor = { channel: "model" as const, id: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "unknown-model" };
 			if (current.state.status !== "implementing") throw new Error(`${APPLY_TOOL} is available only during implementation`);

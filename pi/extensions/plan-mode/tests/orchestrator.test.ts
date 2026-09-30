@@ -5,7 +5,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { accumulatedPatch, applyDiff, buildStepTask, currentStepInfo, revertAppliedDiff } from "../src/orchestrator.ts";
+import { accumulatedPatch, applyDiff, buildStepTask, currentStepInfo, dispatchStepToSubtask, formatDispatchProgress, revertAppliedDiff } from "../src/orchestrator.ts";
+import type { TaskResult } from "../../parallel-tasks/src/dispatch.ts";
 import type { ExecutionState, PlanSpec } from "../src/domain.ts";
 
 function git(cwd: string, args: string[], opts?: { input?: string }): { ok: boolean; stdout: string; stderr: string } {
@@ -114,4 +115,19 @@ test("PM4-P0-004 currentStepInfo and buildStepTask project the current step", ()
 	assert.match(task, /S2/);
 	assert.match(task, /Do B/);
 	assert.match(task, /edit b/);
+	assert.match(buildStepTask(spec.steps[0], 0), /1\. tsc/);
+	assert.match(buildStepTask(spec.steps[0], 0), /全部通过才向主会话提交 diff/);
+});
+
+test("PM4-P0-009 dispatch progress shows child activity and elapsed time without child output", () => {
+	const task = { status: "running", currentAction: "read src/file.ts", output: "private intermediate notes" } as TaskResult;
+	assert.equal(formatDispatchProgress([task], 13), "步骤派发：0/1 完成 · read src/file.ts · 13s");
+	assert.equal(formatDispatchProgress([{ ...task, status: "finished", currentAction: undefined }], 15), "步骤派发：1/1 完成 · 15s");
+	assert.doesNotMatch(formatDispatchProgress([task], 13), /private intermediate notes/);
+});
+
+test("PM4-P0-008 dispatch refuses to start a child without executable acceptance checks", async () => {
+	const result = await dispatchStepToSubtask({ cwd: process.cwd(), task: "implement", validation: [] });
+	assert.match(result.error ?? "", /缺少有效的可执行验收命令/);
+	assert.deepEqual(result.results, []);
 });

@@ -29,8 +29,10 @@ export interface TaskResult {
 	label: string;
 	/** 子进程尚未启动、正在运行或已结束。用于区分排队任务和活动任务。 */
 	status: "queued" | "running" | "finished";
-	/** 当前子进程正在调用的只读工具，可能缺失。 */
+	/** 当前子进程正在调用的工具，可能缺失。 */
 	currentAction?: string;
+	/** 实际开始时间，用于 TUI 展示进行中的耗时。 */
+	startedAt?: number;
 	exitCode: number;
 	output: string;
 	toolCalls: number;
@@ -43,6 +45,8 @@ export interface TaskResult {
 	diff?: string;
 	/** 可写角色改动的文件路径列表。 */
 	changedFiles?: string[];
+	/** 仅 plan-mode 派发时，在 worktree 内执行的逐项验收结果。 */
+	verification?: VerificationResult[];
 	usage: { input: number; output: number; cost: number; turns: number };
 	durationMs: number;
 }
@@ -60,11 +64,89 @@ export interface DispatchOptions {
 	signal?: AbortSignal;
 	/** 进度回调：每次子任务状态变化时用当前 results 快照回调。 */
 	onProgress?: (live: readonly TaskResult[]) => void;
+	/** 每批最大并发数，1..MAX_CONCURRENCY；不传时沿用默认 4。 */
+	maxConcurrency?: number;
 	/**
 	 * 可写角色 worktree 的累计补丁：在 `git worktree add HEAD` 后、子任务启动前应用。
 	 * 用于顺序步骤：step N 的 worktree 基于 HEAD + step 1..N-1 已应用的改动。
 	 */
 	basePatch?: string;
+	/** 仅 plan-mode 使用；不改变普通 parallel_tasks implementer 的无 bash 策略。 */
+	verificationCommands?: readonly string[];
+}
+
+export interface VerificationResult {
+	command: string;
+	ok: boolean;
+	exitCode: number | null;
+	output: string;
+}
+
+const VERIFY_TIMEOUT_MS = 120_000;
+const VERIFY_OUTPUT_CAP = 2048;
+
+/** 在已批准计划的临时 worktree 中逐项执行验收命令；命令失败/取消时立即停止。 */
+export async function runVerificationCommands(
+	cwd: string,
+	commands: readonly string[],
+	signal?: AbortSignal,
+	onAction?: (action: string | undefined) => void,
+	timeoutMs = VERIFY_TIMEOUT_MS,
+): Promise<VerificationResult[]> {
+	const results: VerificationResult[] = [];
+	for (const command of commands) {
+		if (!command.trim() || command.length > 2048) {
+			results.push({ command, ok: false, exitCode: null, output: "验收项必须是非空且不超过 2048 字符的可执行命令" });
+			break;
+		}
+		if (signal?.aborted) {
+			results.push({ command, ok: false, exitCode: null, output: "验收已取消" });
+			break;
+		}
+		onAction?.(`验收 ${results.length + 1}/${commands.length}: ${oneLine(command, 80)}`);
+		const check = await new Promise<VerificationResult>((resolve) => {
+			// shell 命令来自用户已批准的 PlanSpec；worktree 不是 OS 沙箱。
+			const detached = process.platform !== "win32";
+			const proc = spawn("sh", ["-c", command], {
+				cwd, shell: false, detached, stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", GIT_PAGER: "cat", PAGER: "cat" },
+			});
+			let output = "";
+			let completed = false;
+			let timedOut = false;
+			let cancelled = false;
+			const kill = () => {
+				try {
+					if (process.platform === "win32" && proc.pid) {
+						spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 });
+					} else if (detached && proc.pid) process.kill(-proc.pid, "SIGKILL");
+					else proc.kill("SIGKILL");
+				} catch { /* already exited */ }
+			};
+			const abort = () => { cancelled = true; kill(); finish(null); proc.stdout.destroy(); proc.stderr.destroy(); };
+			const timer = setTimeout(() => { timedOut = true; kill(); finish(null); proc.stdout.destroy(); proc.stderr.destroy(); }, timeoutMs);
+			const finish = (exitCode: number | null, error?: string) => {
+				if (completed) return;
+				completed = true;
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", abort);
+				const diagnostic = error ?? (cancelled ? "验收已取消" : timedOut ? `验收超时（${timeoutMs}ms）` : output.trim());
+				resolve({ command, ok: exitCode === 0 && !cancelled && !timedOut && !error, exitCode, output: diagnostic });
+			};
+			proc.stdout.on("data", (data) => { output = appendCapped(output, data.toString(), VERIFY_OUTPUT_CAP); });
+			proc.stderr.on("data", (data) => { output = appendCapped(output, data.toString(), VERIFY_OUTPUT_CAP); });
+			proc.on("close", (code) => finish(code));
+			proc.on("error", (error) => finish(null, `无法启动验收命令：${error.message}`));
+			if (signal) {
+				if (signal.aborted) abort();
+				else signal.addEventListener("abort", abort, { once: true });
+			}
+		});
+		results.push(check);
+		onAction?.(undefined);
+		if (!check.ok) break;
+	}
+	return results;
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -110,7 +192,7 @@ function appendCapped(current: string, addition: string, cap: number): string {
 }
 
 export function failed(r: TaskResult): boolean {
-	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+	return r.exitCode !== 0 || !!r.errorMessage || r.stopReason === "error" || r.stopReason === "aborted";
 }
 
 /** 运行一个短命令（用于 worktree 创建/销毁与 diff 采集），同步执行并捕获输出。 */
@@ -208,7 +290,43 @@ export function captureWorktreeChanges(worktreeDir: string, baselineTree: string
 	};
 }
 
-async function mapWithLimit<TIn, TOut>(
+export interface VerifiedChanges {
+	verification: VerificationResult[];
+	changes?: CapturedChanges;
+	error?: string;
+}
+
+/** 验收之前先固定实现补丁；验收命令若改动受跟踪文件或生成未忽略文件则拒绝返回。 */
+export async function verifyWorktreeChanges(
+	worktreeDir: string,
+	baselineTree: string,
+	commands: readonly string[],
+	signal?: AbortSignal,
+	onAction?: (action: string | undefined) => void,
+): Promise<VerifiedChanges> {
+	const before = captureWorktreeChanges(worktreeDir, baselineTree);
+	if (!before.ok) return { verification: [], error: before.error };
+	if (Buffer.byteLength(before.diff, "utf8") > PER_TASK_OUTPUT_CAP) {
+		return { verification: [], error: `implementer diff 超过 ${PER_TASK_OUTPUT_CAP} 字节上限；请拆分步骤后重试` };
+	}
+	const verification = await runVerificationCommands(worktreeDir, commands, signal, onAction);
+	const failedCheck = verification.find((check) => !check.ok);
+	if (signal?.aborted || verification.length !== commands.length || failedCheck || commands.length === 0) {
+		return {
+			verification,
+			error: failedCheck
+				? `验收未通过：${oneLine(failedCheck.command, 80)}（exit=${failedCheck.exitCode ?? "unknown"}；${failedCheck.exitCode === null ? "已取消或超时" : "请在受信任环境检查详细日志"}）`
+				: "验收取消或未完整执行；不提交 diff",
+		};
+	}
+	const after = captureWorktreeChanges(worktreeDir, baselineTree);
+	if (!after.ok) return { verification, error: after.error };
+	if (before.diff !== after.diff) return { verification, error: "验收命令改变了 worktree 的待交付补丁；不提交 diff" };
+	if (signal?.aborted) return { verification, error: "验收已取消；不提交 diff" };
+	return { verification, changes: before };
+}
+
+export async function mapWithLimit<TIn, TOut>(
 	items: TIn[],
 	limit: number,
 	fn: (item: TIn, index: number) => Promise<TOut>,
@@ -236,6 +354,7 @@ async function runTask(
 	onProgress: (() => void) | undefined,
 	result: TaskResult,
 	basePatch?: string,
+	verificationCommands?: readonly string[],
 ): Promise<TaskResult> {
 	const started = Date.now();
 	let scratch: string | null = null;
@@ -312,6 +431,7 @@ async function runTask(
 				},
 			});
 			result.status = "running";
+			result.startedAt = Date.now();
 			onProgress?.();
 
 			let buffer = "";
@@ -432,23 +552,40 @@ async function runTask(
 				result.stopReason = "error";
 				result.errorMessage = "worktree baseline tree 缺失";
 			} else {
-				const changes = captureWorktreeChanges(workCwd, baselineTree);
-				if (!changes.ok) {
-					result.exitCode = 1;
-					result.stopReason = "error";
-					result.errorMessage = changes.error;
-				} else if (Buffer.byteLength(changes.diff, "utf8") > PER_TASK_OUTPUT_CAP) {
-					result.exitCode = 1;
-					result.stopReason = "error";
-					result.errorMessage = `implementer diff 超过 ${PER_TASK_OUTPUT_CAP} 字节上限；请拆分步骤后重试`;
-					result.changedFiles = changes.changedFiles;
+				let changes: CapturedChanges | undefined;
+				if (verificationCommands) {
+					const verified = await verifyWorktreeChanges(workCwd, baselineTree, verificationCommands, signal, (action) => {
+						result.currentAction = action;
+						onProgress?.();
+					});
+					result.verification = verified.verification;
+					changes = verified.changes;
+					if (verified.error) {
+						result.exitCode = 1;
+						result.stopReason = signal?.aborted ? "aborted" : "error";
+						result.errorMessage = verified.error;
+					}
 				} else {
-					result.diff = changes.diff;
-					result.changedFiles = changes.changedFiles;
+					changes = captureWorktreeChanges(workCwd, baselineTree);
+				}
+				if (changes && !failed(result)) {
+					if (!changes.ok || Buffer.byteLength(changes.diff, "utf8") > PER_TASK_OUTPUT_CAP) {
+						result.exitCode = 1;
+						result.stopReason = "error";
+						result.errorMessage = changes.error ?? `implementer diff 超过 ${PER_TASK_OUTPUT_CAP} 字节上限；请拆分步骤后重试`;
+					} else {
+						result.diff = changes.diff;
+						result.changedFiles = changes.changedFiles;
+					}
 				}
 			}
 		}
-		if (aborted) result.stopReason = "aborted";
+		if (signal?.aborted || aborted) {
+			result.exitCode = 1;
+			result.stopReason = "aborted";
+			result.diff = undefined;
+			result.errorMessage = result.errorMessage ?? "派发已取消；不提交 diff";
+		}
 		result.status = "finished";
 		result.currentAction = undefined;
 		result.durationMs = Date.now() - started;
@@ -545,6 +682,10 @@ export async function dispatchTasks(
 	if (tasks.length < 1 || tasks.length > MAX_TASKS) {
 		throw new RangeError(`tasks 数量必须在 1..${MAX_TASKS}，实际为 ${tasks.length}`);
 	}
+	const concurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
+	if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) {
+		throw new RangeError(`maxConcurrency 必须在 1..${MAX_CONCURRENCY}，实际为 ${concurrency}`);
+	}
 	const live: TaskResult[] = tasks.map((t, i) => ({
 		role: t.role,
 		task: t.task,
@@ -558,10 +699,11 @@ export async function dispatchTasks(
 		durationMs: 0,
 	}));
 	const byName = new Map(roles.map((role) => [role.name, role]));
-	const notify = () => options.onProgress?.(live);
+	// 不把正在被子进程更新的可变对象传给 UI/onUpdate：历史帧不能随后的工具事件悄悄变化。
+	const notify = () => options.onProgress?.(live.map((r) => ({ ...r, usage: { ...r.usage } })));
 	notify();
 
-	await mapWithLimit(tasks, MAX_CONCURRENCY, async (t, i) => {
+	await mapWithLimit(tasks, concurrency, async (t, i) => {
 		if (options.signal?.aborted) {
 			live[i].exitCode = 1;
 			live[i].stopReason = "aborted";
@@ -589,7 +731,9 @@ export async function dispatchTasks(
 			notify,
 			live[i],
 			options.basePatch,
+			options.verificationCommands,
 		);
+		notify();
 	});
 	return live;
 }

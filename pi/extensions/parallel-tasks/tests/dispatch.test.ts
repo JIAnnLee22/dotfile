@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { loadRoles, readOnlyRoleNames, ROLES_DIR } from "../src/roles.ts";
-import { captureWorktreeChanges, createWorktree, dispatchTasks, MAX_TASKS } from "../src/dispatch.ts";
+import { captureWorktreeChanges, createWorktree, dispatchTasks, mapWithLimit, MAX_TASKS, runVerificationCommands, verifyWorktreeChanges, type TaskResult } from "../src/dispatch.ts";
 import { escapesWorktree, validateBash } from "../write-guard.ts";
 
 function git(cwd: string, args: string[], opts?: { input?: string }): { ok: boolean; stdout: string; stderr: string } {
@@ -130,4 +130,117 @@ test("PT-DISPATCH core rejects task counts outside its own limit", async () => {
 	await assert.rejects(() => dispatchTasks([], [], { cwd: process.cwd() }), /1\.\./);
 	const tooMany = Array.from({ length: MAX_TASKS + 1 }, (_, i) => ({ role: "probe", task: String(i) }));
 	await assert.rejects(() => dispatchTasks([], tooMany, { cwd: process.cwd() }), /1\.\./);
+});
+
+test("PT-DISPATCH optional concurrency is bounded without changing default dispatch", async () => {
+	const task = [{ role: "unknown", task: "no spawn" }];
+	for (const maxConcurrency of [0, -1, 1.5, 5, NaN]) {
+		await assert.rejects(() => dispatchTasks([], task, { cwd: process.cwd(), maxConcurrency }), /maxConcurrency/);
+	}
+	const frames: TaskResult[][] = [];
+	const results = await dispatchTasks([], task, {
+		cwd: process.cwd(), maxConcurrency: 1,
+		onProgress: (live) => frames.push([...live]),
+	});
+	assert.equal(results[0].status, "finished");
+	assert.deepEqual(frames.map((frame) => frame.map((r) => r.status)), [["queued"], ["finished"]]);
+	assert.notEqual(frames[0][0], results[0], "previous UI frame must not mutate after dispatch");
+});
+
+test("PT-DISPATCH concurrency scheduler respects its per-batch limit and preserves result order", async () => {
+	let running = 0;
+	let maxRunning = 0;
+	const results = await mapWithLimit([0, 1, 2, 3, 4, 5], 2, async (item) => {
+		running++;
+		maxRunning = Math.max(maxRunning, running);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		running--;
+		return item * 2;
+	});
+	assert.equal(maxRunning, 2);
+	assert.deepEqual(results, [0, 2, 4, 6, 8, 10]);
+});
+
+test("PM4-P0-009 dispatch reports finished after a worktree initialization failure", async () => {
+	const states: string[] = [];
+	const roles = loadRoles(ROLES_DIR);
+	const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-not-repo-"));
+	try {
+		const results = await dispatchTasks(roles, [{ role: "implementer", task: "do work" }], {
+			cwd,
+			onProgress: (live) => states.push(live[0].status),
+		});
+		assert.equal(results[0].status, "finished");
+		assert.equal(results[0].exitCode, 1);
+		assert.deepEqual(states, ["queued", "finished"]);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("PM4-P0-008 worktree acceptance runs every command and returns bounded evidence", async () => {
+	const cwd = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-verify-"));
+	try {
+		const actions: Array<string | undefined> = [];
+		const result = await runVerificationCommands(cwd, ["pwd", "printf verified"], undefined, (action) => actions.push(action));
+		assert.deepEqual(result.map((check) => check.ok), [true, true]);
+		assert.match(result[0].output, /pi-verify-/);
+		assert.equal(result[1].output, "verified");
+		assert.deepEqual(actions, ["验收 1/2: pwd", undefined, "验收 2/2: printf verified", undefined]);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("PM4-P0-008 worktree validation only returns the original implementation diff", async () => {
+	const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-verify-diff-"));
+	try {
+		git(root, ["init", "-q"]);
+		git(root, ["config", "user.email", "t@example.com"]);
+		git(root, ["config", "user.name", "tester"]);
+		fs.writeFileSync(path.join(root, "a.txt"), "original\n");
+		git(root, ["add", "a.txt"]);
+		git(root, ["commit", "-q", "-m", "initial"]);
+		const wt = createWorktree(root, root);
+		assert.ok(wt.dir && wt.baselineTree);
+		try {
+			fs.writeFileSync(path.join(wt.dir!, "a.txt"), "implemented\n");
+			const pass = await verifyWorktreeChanges(wt.dir!, wt.baselineTree!, ["grep implemented a.txt"]);
+			assert.equal(pass.error, undefined);
+			assert.match(pass.changes?.diff ?? "", /implemented/);
+			const polluted = await verifyWorktreeChanges(wt.dir!, wt.baselineTree!, ["touch generated.txt"]);
+			assert.match(polluted.error ?? "", /改变了 worktree/);
+			assert.equal(polluted.changes, undefined);
+		} finally {
+			assert.equal(wt.cleanup?.().ok, true);
+		}
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("PM4-P0-008 failed acceptance stops the remaining commands", async () => {
+	const result = await runVerificationCommands(process.cwd(), ["false", "printf must-not-run"]);
+	assert.equal(result.length, 1);
+	assert.equal(result[0].ok, false);
+	assert.equal(result[0].exitCode, 1);
+});
+
+test("PM4-P0-008 acceptance times out or cancels instead of claiming a pass", async () => {
+	const timed = await runVerificationCommands(process.cwd(), ["sleep 2", "printf must-not-run"], undefined, undefined, 20);
+	assert.equal(timed.length, 1);
+	assert.equal(timed[0].ok, false);
+	assert.match(timed[0].output, /超时/);
+	const controller = new AbortController();
+	controller.abort();
+	const aborted = await runVerificationCommands(process.cwd(), ["printf must-not-run"], controller.signal);
+	assert.equal(aborted[0].ok, false);
+	assert.match(aborted[0].output, /取消/);
+	const active = new AbortController();
+	const pending = runVerificationCommands(process.cwd(), ["sleep 2", "printf must-not-run"], active.signal);
+	setTimeout(() => active.abort(), 20);
+	const interrupted = await pending;
+	assert.equal(interrupted.length, 1);
+	assert.equal(interrupted[0].ok, false);
+	assert.match(interrupted[0].output, /取消/);
 });

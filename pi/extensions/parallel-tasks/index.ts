@@ -10,11 +10,12 @@
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { type ExtensionAPI, type ExtensionContext, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Text, matchesKey, stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { buildIntegration, dispatchTasks, failed, MAX_TASKS, type TaskResult } from "./src/dispatch.ts";
+import { buildIntegration, dispatchTasks, failed, MAX_CONCURRENCY, MAX_TASKS, type TaskResult } from "./src/dispatch.ts";
 import { loadRoles, ROLES_DIR } from "./src/roles.ts";
+import { compact, taskDetailText, taskState, taskWidgetLines } from "./src/ui.ts";
 
 interface Details {
 	results: TaskResult[];
@@ -29,6 +30,102 @@ function oneLine(text: string, maxLength: number): string {
 export default function (pi: ExtensionAPI) {
 	const roles = loadRoles(ROLES_DIR);
 	const roleNames = roles.map((r) => r.name);
+	const activeBatches = new Map<symbol, readonly TaskResult[]>();
+	let lastResults: readonly TaskResult[] = [];
+	let generation = 0;
+	let requestWidgetRender: (() => void) | undefined;
+	let widgetTimer: NodeJS.Timeout | undefined;
+
+	function updateWidget(ctx: ExtensionContext): void {
+		if (ctx.mode !== "tui") return;
+		if (activeBatches.size === 0) {
+			if (widgetTimer) clearInterval(widgetTimer);
+			widgetTimer = undefined;
+			ctx.ui.setWidget("parallel-tasks", undefined);
+			ctx.ui.setStatus("parallel-tasks", undefined);
+			requestWidgetRender = undefined;
+			return;
+		}
+		const live = [...activeBatches.values()].flat();
+		const running = live.filter((r) => r.status === "running").length;
+		const queued = live.filter((r) => r.status === "queued").length;
+		ctx.ui.setStatus("parallel-tasks", `${running} 运行 · ${queued} 排队`);
+		if (!widgetTimer) {
+			widgetTimer = setInterval(() => requestWidgetRender?.(), 1000);
+			widgetTimer.unref();
+		}
+		if (requestWidgetRender) {
+			requestWidgetRender();
+			return;
+		}
+		ctx.ui.setWidget("parallel-tasks", (tui, theme) => {
+			requestWidgetRender = () => tui.requestRender();
+			return {
+				render(width: number): string[] {
+					return taskWidgetLines([...activeBatches.values()].flat()).map((line, i) => {
+						const color = i === 0 || line.startsWith("◉") ? "accent" : line.startsWith("✓") ? "success" : line.startsWith("✗") ? "error" : "dim";
+						return truncateToWidth(theme.fg(color, line), width, theme.fg("dim", "…"));
+					});
+				},
+				invalidate() {},
+			};
+		}, { placement: "aboveEditor" });
+	}
+
+	function resetSession(ctx: ExtensionContext): void {
+		generation++;
+		activeBatches.clear();
+		lastResults = [];
+		if (widgetTimer) clearInterval(widgetTimer);
+		widgetTimer = undefined;
+		updateWidget(ctx);
+	}
+	pi.on("session_start", (_event, ctx) => resetSession(ctx));
+	pi.on("session_shutdown", (_event, ctx) => resetSession(ctx));
+
+	pi.registerCommand("parallel-results", {
+		description: "在 TUI 中查看本次会话最近一批并行子任务的状态与完整结果",
+		handler: async (_args, ctx) => {
+			if (ctx.mode !== "tui") return;
+			const results = lastResults;
+			if (!results.length) {
+				ctx.ui.notify("本次会话尚无已完成的并行子任务", "info");
+				return;
+			}
+			const labels = results.map((r, i) => `${i + 1}. ${taskState(r)} [${compact(r.label, 24)}] ${compact(r.task, 54)}`);
+			const picked = await ctx.ui.select("最近一次并行任务 · 选择查看详情", labels);
+			const index = labels.indexOf(picked ?? "");
+			if (index < 0) return;
+			const r = results[index];
+			const body = stripTerminalSequences(taskDetailText(r));
+			await ctx.ui.custom((tui, theme, _kb, done) => {
+				const content = new Text(body, 0, 0);
+				let scroll = 0;
+				return {
+					render(width: number): string[] {
+						const visible = Math.max(3, tui.terminal.rows - 7);
+						const lines = content.render(width);
+						scroll = Math.max(0, Math.min(scroll, Math.max(0, lines.length - visible)));
+						return [
+							truncateToWidth(theme.fg("accent", `[${compact(r.label, 40)}] ${taskState(r)} · ${scroll + 1}-${Math.min(scroll + visible, lines.length)}/${lines.length}`), width),
+							...lines.slice(scroll, scroll + visible),
+							truncateToWidth(theme.fg("dim", "↑/↓ 滚动 · PgUp/PgDn 翻页 · Esc 关闭"), width),
+						];
+					},
+					invalidate: () => content.invalidate(),
+					handleInput(data: string) {
+						if (matchesKey(data, "escape") || data === "q") return done(undefined);
+						if (matchesKey(data, "up")) scroll = Math.max(0, scroll - 1);
+						else if (matchesKey(data, "down")) scroll++;
+						else if (matchesKey(data, "pageUp")) scroll = Math.max(0, scroll - 15);
+						else if (matchesKey(data, "pageDown")) scroll += 15;
+						else return;
+						tui.requestRender();
+					},
+				};
+			});
+		},
+	});
 
 	pi.registerCommand("parallel-roles", {
 		description: "列出 parallel_tasks 可用的子任务角色",
@@ -57,6 +154,7 @@ export default function (pi: ExtensionAPI) {
 			"任务之间存在先后依赖时不要用 parallel_tasks，直接顺序处理。",
 		],
 		parameters: Type.Object({
+			maxConcurrency: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_CONCURRENCY, description: `本批最大并发数，默认 ${MAX_CONCURRENCY}` })),
 			tasks: Type.Array(
 				Type.Object({
 					role: roleNames.length > 0 ? StringEnum(roleNames as any) : Type.String(),
@@ -98,7 +196,12 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			const batch = Symbol("parallel-tasks");
+			const batchGeneration = generation;
 			const emit = (live: readonly TaskResult[]) => {
+				if (batchGeneration !== generation) return;
+				activeBatches.set(batch, live);
+				updateWidget(ctx);
 				const running = live.filter((r) => r.status !== "finished").length;
 				const details = { results: [...live], running } as Details;
 				const active = live.filter((r) => r.status === "running");
@@ -117,17 +220,26 @@ export default function (pi: ExtensionAPI) {
 				pi.events.emit("operations-deck:tasks", details);
 			};
 
-			const results = await dispatchTasks(
-				roles,
-				params.tasks.map((t) => ({ role: t.role, task: t.task, label: t.label })),
-				{
-					cwd: ctx.cwd,
-					fallbackProvider: ctx.model?.provider,
-					signal,
-					onProgress: emit,
-				},
-			);
-
+			let results: TaskResult[];
+			try {
+				results = await dispatchTasks(
+					roles,
+					params.tasks.map((t) => ({ role: t.role, task: t.task, label: t.label })),
+					{
+						cwd: ctx.cwd,
+						fallbackProvider: ctx.model?.provider,
+						signal,
+						maxConcurrency: params.maxConcurrency,
+						onProgress: emit,
+					},
+				);
+			} finally {
+				if (batchGeneration === generation) {
+					activeBatches.delete(batch);
+					updateWidget(ctx);
+				}
+			}
+			if (batchGeneration === generation) lastResults = results;
 			const anyOk = results.some((r) => !failed(r));
 			return {
 				content: [{ type: "text", text: buildIntegration(results) }],
@@ -139,7 +251,7 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme) {
 			const tasks = args.tasks ?? [];
 			let text =
-				theme.fg("toolTitle", theme.bold("parallel_tasks ")) + theme.fg("accent", `${tasks.length} 个并行子任务`);
+				theme.fg("toolTitle", theme.bold("parallel_tasks ")) + theme.fg("accent", `${tasks.length} 个并行子任务 · 并发 ${args.maxConcurrency ?? MAX_CONCURRENCY}`);
 			for (const t of tasks.slice(0, 4)) {
 				const preview = t.task.length > 50 ? `${t.task.slice(0, 50)}...` : t.task;
 				text += `\n  ${theme.fg("accent", t.role)}${theme.fg("dim", ` ${preview}`)}`;
@@ -155,10 +267,9 @@ export default function (pi: ExtensionAPI) {
 				return new Text(first?.type === "text" ? first.text : "(无输出)", 0, 0);
 			}
 
-			const okCount = details.results.filter((r) => !failed(r) && r.durationMs > 0).length;
 			const status =
 				details.running > 0
-					? `${okCount}/${details.results.length} 完成，${details.running} 进行中`
+					? `${details.results.filter((r) => r.status === "finished").length}/${details.results.length} 已结束，${details.results.filter((r) => r.status === "running").length} 运行，${details.results.filter((r) => r.status === "queued").length} 排队`
 					: `${details.results.filter((r) => !failed(r)).length}/${details.results.length} 成功`;
 
 			const active = details.results.filter((r) => r.status === "running");
@@ -174,8 +285,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			for (const r of details.results) {
-				const pending = r.durationMs === 0 && details.running > 0;
-				const icon = pending ? theme.fg("muted", "⏳") : failed(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
+				const icon = r.status === "queued" ? theme.fg("muted", "◦") : r.status === "running" ? theme.fg("accent", "◉") : failed(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const stats = [
 					r.usage.turns > 0 ? `${r.usage.turns}轮` : "",
 					r.toolCalls > 0 ? `${r.toolCalls}次工具` : "",
@@ -188,7 +298,7 @@ export default function (pi: ExtensionAPI) {
 
 				container.addChild(
 					new Text(
-						`${icon} ${theme.fg("accent", `[${r.label}] ${r.role}`)} ${theme.fg("muted", stats)}`,
+						`${icon} ${theme.fg("accent", `[${compact(r.label, 24)}] ${compact(r.role, 18)}`)} ${theme.fg("muted", stats)}${r.status === "running" && r.currentAction ? `\n  ${theme.fg("dim", compact(r.currentAction, 88))}` : ""}`,
 						0,
 						0,
 					),
@@ -198,9 +308,9 @@ export default function (pi: ExtensionAPI) {
 					container.addChild(new Text(theme.fg("dim", `  ${r.task}`), 0, 0));
 					const body = failed(r) ? r.errorMessage || r.stderr.trim() || r.output : r.output;
 					if (body) container.addChild(new Markdown(body, 2, 0, getMarkdownTheme()));
-				} else if (r.output) {
+				} else if (r.output && r.status === "finished") {
 					const line = r.output.split("\n").find((l) => l.trim() && !l.startsWith("#")) ?? "";
-					if (line) container.addChild(new Text(theme.fg("toolOutput", `  ${line.slice(0, 100)}`), 0, 0));
+					if (line) container.addChild(new Text(theme.fg("toolOutput", `  ${compact(line, 100)}`), 0, 0));
 				}
 			}
 

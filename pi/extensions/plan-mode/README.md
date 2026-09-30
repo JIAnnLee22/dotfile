@@ -110,7 +110,7 @@ $PI_CODING_AGENT_DIR/plan-mode-policy.json
 
 ### 派发优先（软引导）
 
-实施期默认保留普通 Pi 权限，但注入“只统筹”指引：优先用 `plan_dispatch_step` 把当前步骤派发给 implementer 子任务（隔离 worktree），审查 diff、用 `plan_apply_diff` 落地、验证后再 `plan_step_complete`；琐碎改动才直接 edit/write。主会话只接触步骤汇总与 diff，避免实现细节撑爆上下文。
+实施期默认保留普通 Pi 权限，但注入“只统筹”指引：优先用 `plan_dispatch_step` 把当前步骤派发给 implementer 子任务（隔离 worktree）。派发期间工具行与状态栏显示子会话当前操作、验收项及每 10 秒更新的耗时；任务完成/失败后清除临时状态。计划步骤的 `validation` 须逐项写成可执行 shell 命令（例如 `node --test tests/example.test.js`）；缺失、失败、超时或取消时不返回可应用 diff。子任务完成改动后，由派发器在其 worktree 内依次执行这些命令，全部 exit 0 才把验收摘要及完整 diff 交给主会话。主会话审查 diff、用 `plan_apply_diff` 落地、复核后再 `plan_step_complete`；琐碎改动才直接 edit/write。子会话的中间讨论与命令输出不进入主会话模型上下文。
 
 ## Orchestrator 模式（可选硬门禁）
 
@@ -121,7 +121,7 @@ $PI_CODING_AGENT_DIR/plan-mode-policy.json
 - `plan_dispatch_step` / `plan_apply_diff`
 - `plan_step_complete` / `plan_blocked`
 
-所有改动必须经子任务 worktree，主会话只审查 diff 并 `git apply --index` 落地。ApprovalRecord 与审计标注 orchestrator 模式。这是对 v0.4“实施期普通权限”的可选增强，默认关闭，不弱化默认路径与 PM4-P0-007。顺序步骤的 worktree 基于 HEAD + 已落地的累计改动（`git diff --cached`），因此步骤间依赖可连续构建。
+所有改动必须经子任务 worktree，主会话只审查已通过验收的 diff 并 `git apply --index` 落地。ApprovalRecord 与审计标注 orchestrator 模式。这是对 v0.4“实施期普通权限”的可选增强，默认关闭，不弱化默认路径与 PM4-P0-007。顺序步骤的 worktree 基于 HEAD + 已落地的累计改动（`git diff --cached`），因此步骤间依赖可连续构建。
 
 ## 计划工件
 
@@ -178,7 +178,7 @@ baseline 在进入 planning 前持久化；reload 时不得把当前受限工具
 
 Plan Mode v2 不是 OS 沙箱。
 
-规划期只约束可信扩展集合中的模型工具调用；不能约束恶意扩展、扩展直接 Node I/O、`pi.exec()`、用户 `!`/`!!` 或 RPC direct bash。实施期明确恢复普通 Pi 权限，`edit/write/bash` 以当前用户权限运行，可能修改文件、启动子进程或访问网络。orchestrator 模式下实施期主会话变更工具被门禁拒绝，但 `plan_apply_diff` 仍会写主工作区、子任务 worktree 的隔离不是安全沙箱。
+规划期只约束可信扩展集合中的模型工具调用；不能约束恶意扩展、扩展直接 Node I/O、`pi.exec()`、用户 `!`/`!!` 或 RPC direct bash。实施期明确恢复普通 Pi 权限，`edit/write/bash` 以当前用户权限运行，可能修改文件、启动子进程或访问网络。orchestrator 模式下实施期主会话变更工具被门禁拒绝，但 `plan_apply_diff` 仍会写主工作区。派发器以当前用户权限在子任务 worktree 执行计划中的 shell 验收命令（每项最多 120 秒），测试脚本仍可能读写 worktree 外部；worktree 隔离不是 OS 安全沙箱。验收发生在补丁落地主仓库之前，主仓库环境可能不同，故仍需落地后复核。
 
 强隔离任务应在容器、VM 或 OS sandbox 中运行整个 Pi。
 

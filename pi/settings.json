@@ -3,7 +3,7 @@
   "defaultModel": "gpt-6-sol",
   "defaultProjectTrust": "ask",
   "defaultProvider": "openai-codex",
-  "defaultThinkingLevel": "high",
+  "defaultThinkingLevel": "xhigh",
   "doubleEscapeAction": "tree",
   "editorPaddingX": 0,
   "extensions": [],
