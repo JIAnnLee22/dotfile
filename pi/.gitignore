@@ -45,6 +45,7 @@ Thumbs.db
 .pi-reference/
 .pi-subagents/
 missions/
+pi-plan/
 pi-plan_leases/
 run-history.jsonl
 

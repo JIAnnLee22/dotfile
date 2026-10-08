@@ -7,6 +7,7 @@
 | 路径 | 用途 | 备注 |
 |------|------|------|
 | `settings.json` | 主配置：packages、skills、模型、TUI 外观等 | 见 optimization.md 逐字段解读 |
+| `subagent.json` | 子代理（pi-subagent）配置：默认模型、thinking 等 | 符号链接至 `~/.pi/subagent.json` |
 | `AGENTS.md` | 注入系统提示的全局协作说明（仓库级） | 与项目内 `AGENTS.md` 同机制 |
 | `APPEND_SYSTEM.md` | 追加到系统提示的内容（输出风格等） | 当前含沟通风格与编码任务汇报规范 |
 | `models.json` | provider/model 清单（用户编辑入口） | 与 `models-store.json` 配套 |

@@ -8,7 +8,7 @@
   "editorPaddingX": 0,
   "extensions": [],
   "fullscreenScrollbar": "hidden",
-  "hideThinkingBlock": false,
+  "hideThinkingBlock": true,
   "lastChangelogVersion": "0.87.1",
   "outputPad": 0,
   "packages": [

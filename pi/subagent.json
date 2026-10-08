@@ -1,0 +1,16 @@
+{
+  "taskDefaults": {
+    "explore": {
+      "model": "antigravity/gemini-3.8-flash",
+      "thinking": "high"
+    },
+    "review": {
+      "model": "antigravity/gemini-3.8-flash",
+      "thinking": "high"
+    },
+    "general": {
+      "model": "antigravity/gemini-3.8-flash",
+      "thinking": "high"
+    }
+  }
+}
