@@ -1,14 +1,14 @@
 {
   "collapseChangelog": true,
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gemini-3.8-flash",
   "defaultProjectTrust": "ask",
-  "defaultProvider": "openai-codex",
+  "defaultProvider": "antigravity",
   "defaultThinkingLevel": "xhigh",
   "doubleEscapeAction": "tree",
   "editorPaddingX": 0,
   "extensions": [],
   "fullscreenScrollbar": "hidden",
-  "hideThinkingBlock": true,
+  "hideThinkingBlock": false,
   "lastChangelogVersion": "1.1.0",
   "outputPad": 0,
   "packages": [
