@@ -1,16 +1,38 @@
 /* =========================================================
- * mangobar style (only modules/properties this bar supports)
- *
- * Modules: bar / tags / layout / title / overview /
- *          clock / cpu / mem / brightness / volume /
- *          network / keymode / keyboardlayout / tray / custom-<name>
- * Tag states: tags.active / tags.occupied / tags.urgent / tags.empty
- * Properties: color / background / padding / margin / border-radius /
- *             min-width / font-family / font-size / font-weight
+ * mangobar style — Catppuccin Mocha Dark (Seamless / Zero-Gap)
  * ========================================================= */
 
-/* ==================== Font ==================== */
-/* font-family / font-size / font-weight. */
+/* ==================== Catppuccin Mocha Palette ==================== */
+@define-color base       #1E1E2E;
+@define-color mantle     #181825;
+@define-color crust      #11111B;
+
+@define-color text       #CDD6F4;
+@define-color subtext1   #BAC2DE;
+@define-color subtext0   #A6ADC8;
+@define-color overlay2   #9399B2;
+@define-color overlay1   #7F849C;
+@define-color overlay0   #6C7086;
+@define-color surface2   #585B70;
+@define-color surface1   #45475A;
+@define-color surface0   #313244;
+
+@define-color blue       #89B4FA;
+@define-color lavender   #B4BEFE;
+@define-color sapphire   #74C7EC;
+@define-color sky        #89DCEB;
+@define-color teal       #94E2D5;
+@define-color green      #A6E3A1;
+@define-color yellow     #F9E2AF;
+@define-color peach      #FAB387;
+@define-color maroon     #EBA0AC;
+@define-color red        #F38BA8;
+@define-color mauve      #CBA6F7;
+@define-color pink       #F5C2E7;
+@define-color flamingo   #F2CDCD;
+@define-color rosewater  #F5E0DC;
+
+/* ==================== Global Font & Defaults ==================== */
 * {
     font-family: "Maple Mono NF CN";
     font-size: 20px;
@@ -18,130 +40,193 @@
 }
 
 * {
-    color: #ebdbb2;
-    background-color: #504945;
+    color: @text;
+    background-color: @crust;
     padding: 0px 10px;
-    margin: 5px 1px;
-    border-radius: 100px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
+/* ==================== Bar Container ==================== */
 #bar {
-    background: none;
-    margin: 5px 10px;
-}
-#bar.sel {
-    background: none;
+    background: @crust;
+    margin: 0px;
+    border-radius: 0px;
 }
 
+#bar.sel {
+    background: @crust;
+    margin: 0px;
+    border-radius: 0px;
+}
+
+/* ==================== Modules: Left ==================== */
+/* 1. Workspaces (tags) */
 #tags {
-    padding: 0px 13px;
-    margin: 0px 2px;
+    color: @subtext0;
+    padding: 0px 12px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
 #tags.active {
-    background-color: #83a598;
-    color: #1b1a1a;
+    color: @sapphire;
 }
+
 #tags.occupied {
-    background-color: #504945;
-    color: #ebdbb2;
+    color: @subtext0;
 }
+
 #tags.urgent {
-    background-color: #fb4934;
-    color: #1b1a1a;
+    color: @subtext0;
 }
+
 #tags.empty {
-    background-color: #201b14;
-    color: #ebdbb2;
+    color: @subtext0;
+}
+
+#tags.inactive {
+    color: @subtext0;
+}
+
+#tags.hover {
+    color: @text;
 }
 
 /* Overview mode */
 #overview {
-    background-color: #83a598;
-    color: #1b1a1a;
-}
-
-/* Layout symbol */
-#layout {
+    background-color: @lavender;
+    color: @crust;
     padding: 0px 12px;
-    background-color: #bd788a;
-    color: #111111;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 2. Window Layout */
+#layout {
+    color: @sapphire;
+    padding: 0px 12px;
     min-width: 34px;
-    margin: 5px 5px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
-/* Window title */
+/* 3. Window Title */
 #title {
-    background-color: #bd788a;
-    color: #111111;
+    padding: 0px 14px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
-/* Right-side system modules */
-#clock {
-    background-color: #c4b595;
-    color: #1b1a1a;
-}
-/* Date module (clock#date), separate from time */
-#clock.date {
-    background-color: #b8bb26;
-    color: #1b1a1a;
-}
-#cpu {
-    padding: 0px 15px;
-    background-color: #c4b595;
-    color: #1b1a1a;
-}
-#mem {
-    background-color: #83a598;
-    color: #1b1a1a;
-}
-#brightness {
-    background-color: #d3869b;
-    color: #1b1a1a;
-}
-#volume {
-    background-color: #d19e27;
-    color: #1b1a1a;
-}
-#network {
-    background-color: #b8bb26;
-    color: #1b1a1a;
-}
-#battery {
-    background-color: #83a598;
-    color: #1b1a1a;
-}
-#keymode {
-    background-color: #83a598;
-    color: #1b1a1a;
-}
-#keyboardlayout {
-    background-color: #bd788a;
-    color: #1b1a1a;
+/* ==================== Modules: Right ==================== */
+/* 1. Hide Clients */
+#hideclients {
+    color: @sapphire;
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
-/* Custom modules use #custom-<name> (e.g. custom/power -> #custom-power) */
-#custom-power {
-    margin: 0px 5px;
-    background-color: #90AD9D;
-    color: #000000;
-}
-
+/* 2. System Tray */
 #tray {
-    background-color: #6B645A;
-    padding: 0px 15px;
+    background-color: @crust;
+    color: @text;
+    padding: 0px 8px;
+    margin: 0px 0px;
+    border-radius: 0px;
 }
 
+/* 3. Network */
+#network {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 4. CPU */
+#cpu {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 5. Memory */
+#mem {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 6. Pulseaudio / Volume */
+#volume {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 7. Backlight / Brightness */
+#brightness {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 8. Battery */
+#battery {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 9. Date (clock#date) */
+#clock.date {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 10. Time (clock#time) */
+#clock {
+    padding: 0px 12px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* 11. Custom Power Button (custom/power) */
+#custom-power {
+    background-color: @red;
+    color: @crust;
+    padding: 0px 14px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* Optional Modules */
+#keymode {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+#keyboardlayout {
+    padding: 0px 10px;
+    margin: 0px 0px;
+    border-radius: 0px;
+}
+
+/* ==================== Tray Context Menu ==================== */
 menu {
-    background-color: #201B14;
-    border-color: #ebdbb2;
-    border-radius: 10px;
+    background-color: @mantle;
+    border-color: @surface1;
+    border-radius: 8px;
     font-size: 14px;
 }
+
 menuitem {
-    color: #ebdbb2;
+    color: @text;
 }
+
 menuitem:hover {
-    color: #1b1a1a;
-    background-color: #b8bb26;
+    color: @crust;
+    background-color: @mauve;
 }
