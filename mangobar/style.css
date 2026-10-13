@@ -74,23 +74,23 @@
 }
 
 #tags.occupied {
-    color: @subtext0;
+    color: @text;
 }
 
 #tags.urgent {
-    color: @subtext0;
+    color: @red;
 }
 
 #tags.empty {
-    color: @subtext0;
+    color: @overlay0;
 }
 
 #tags.inactive {
-    color: @subtext0;
+    color: @overlay0;
 }
 
 #tags.hover {
-    color: @text;
+    color: @lavender;
 }
 
 /* Overview mode */
