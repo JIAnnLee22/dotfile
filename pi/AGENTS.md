@@ -2,6 +2,10 @@
 
 本目录是 `$PI_CODING_AGENT_DIR`（`~/.pi/agent`），修改插件配置前先检查 `git status --short` 和 `settings.json`；不要覆盖 `auth.json`、`models-store.json`、会话与使用数据。官方行为以当前安装的 Pi 文档和包源码为准，不依赖旧版镜像。
 
+## 包安装与版本一致性
+
+`~/.pi/agent` 是符号链接；安装、移除或更新包时使用实际目录，避免 npm 将锁文件路径写成递归的 `../../../nixos-config/...`：`PI_CODING_AGENT_DIR="$(readlink -f ~/.pi/agent)" pi install npm:<包名>@<版本>`（`pi remove`、`pi update` 同理）。`settings.json` 固定的版本应与 `npm/package.json` 一致；管理目录的 `npm/.npmrc` 保持 `save-exact=true`，避免安装其他包时意外升级已固定的插件。TPS 已迁移为本地 `extensions/tps/index.ts`（基于上游 `1.3.16`）；生成过程中每秒刷新默认 footer 的近 1s/3s、平均和端到端速率，结束后保留最终统计；`/tps` 查看多维详情，`/tps full|compact` 切换页脚。不要同时安装/启用 npm 版 TPS。
+
 ## 当前扩展工作流
 
 - **计划**：社区包 `@bacnh85/pi-plan`；`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve` 经人工确认后实施。`/plan-auto` 会自动批准，不要把它当作普通 `/plan` 使用。计划文件默认写入项目 `.agents/plans/`。
