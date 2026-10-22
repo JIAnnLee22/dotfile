@@ -4,15 +4,14 @@
 
 ## 包安装与版本一致性
 
-`~/.pi/agent` 是符号链接；安装、移除或更新包时使用实际目录，避免 npm 将锁文件路径写成递归的 `../../../nixos-config/...`：`PI_CODING_AGENT_DIR="$(readlink -f ~/.pi/agent)" pi install npm:<包名>@<版本>`（`pi remove`、`pi update` 同理）。`settings.json` 固定的版本应与 `npm/package.json` 一致；管理目录的 `npm/.npmrc` 保持 `save-exact=true`，避免安装其他包时意外升级已固定的插件。TPS 已迁移为本地 `extensions/tps/index.ts`（基于上游 `1.3.16`）；生成过程中每秒刷新默认 footer 的近 1s/3s、平均和端到端速率，结束后保留最终统计；`/tps` 查看多维详情，`/tps full|compact` 切换页脚。不要同时安装/启用 npm 版 TPS。
+`~/.pi/agent` 是符号链接；安装、移除或更新包时使用实际目录，避免 npm 将锁文件路径写成递归的 `../../../nixos-config/...`：`PI_CODING_AGENT_DIR="$(readlink -f ~/.pi/agent)" pi install npm:<包名>@<版本>`（`pi remove`、`pi update` 同理）。`settings.json` 固定的版本应与 `npm/package.json` 一致；管理目录的 `npm/.npmrc` 保持 `save-exact=true`，避免安装其他包时意外升级已固定的插件。TPS 已迁移为本地 `extensions/tps/index.ts`（基于上游 `1.3.16`）；生成过程中每秒刷新默认 footer，仅显示状态符号与生成平均 tok/s 单值（数字加粗、单位弱化；排除首字等待和工具时间，不扣流式停顿），结束后保留最终速率；`/tps` 查看多维详情，`/tps full` 显示 TTFT、输出量、近 1s/3s、端到端等诊断指标，`/tps compact` 恢复极简单值。不要同时安装/启用 npm 版 TPS。
 
 ## 当前扩展工作流
 
-- **计划**：社区包 `@bacnh85/pi-plan`；`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve` 经人工确认后实施。`/plan-auto` 会自动批准，不要把它当作普通 `/plan` 使用。计划文件默认写入项目 `.agents/plans/`。
-- **自主循环**：社区包 `pi-loop-mode`；需要客观完成条件时使用 `/loop start <目标> --check "<验证命令>" --until-done --max 50`。默认循环无上限；务必给出 `--max`。其 `--check` 不等于旧本地 autopilot 的 AC 干跑或写路径门禁；无人值守任务最好在隔离环境运行。
+- **计划**：社区包 `@bacnh85/pi-plan@0.16.7`，其 peer 范围覆盖当前 Pi 1.1.0；升级 Pi 时重新核对兼容范围。`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve current|new` 经人工确认后实施。`pi-plan.autoFlow` 明确设为 `false`；不使用 `/plan-auto`、`/goal` 或自动 review/fix flow。计划文件默认写入项目 `.agents/plans/`。
 - **并行子任务**：社区包 `@parke.dev/pi-subagent` 的 `subagent` 工具。独立的只读工作用 `explore` profile；编码用 `general` + `isolation: "worktree"`，先查看 diff，再决定 apply/discard。worktree 不是操作系统沙箱。
 - **本地用量面板**：`extensions/usage/index.ts`，保留 `/usage`、`/usage-opencode-go`、`/usage-chatgpt`、`/usage-codex`、`/usage-antigravity`；`extensions/usage-overlay.ts` 是兼容入口。
-- **网页与上下文**：`pi-web-access` 提供 `web_search`、`source_check`、`fetch_content`、`get_search_content`；`web-search.json` 使用 eager 加载以保持这些工具可见。`context-mode` 提供 `ctx_*`，大量输出优先在执行器中汇总或索引后按需检索。其 `ctx_execute` 等可在项目 cwd 写文件，不是只读安全边界。
+- **网页与大输出**：`pi-web-access` 提供 `web_search`、`source_check`、`fetch_content`、`get_search_content`；`web-search.json` 使用 eager 加载以保持这些工具可见。大输出先在 `bash` 内汇总，只返回必要结果；需要脚本编排工具时可按需用 `pi --tools +codemode` 启用内置能力。当前不启用自主循环或持久知识库，不要主动安装相关插件；已有历史数据保留。
 
 旧 `plan-mode`、`autopilot`、`parallel-tasks` 和自定义标题扩展已移除；旧的 `PLAN_MODE_REQUIREMENTS_A.md`/`B.md` 是历史设计文档，不能当作当前插件的能力说明。需要恢复旧实现时从迁移前提交 `268c493` 查阅，不要再调用 `plan_submit`、`autopilot_submit`、`parallel_tasks` 等旧工具。
 

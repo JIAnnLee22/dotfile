@@ -22,8 +22,8 @@
 | 路径 | 用途 |
 |------|------|
 | `skills/` | 自定义 skills（settings.json `"skills": ["./skills"]` 注册），每个子目录一个 `SKILL.md` |
-| `extensions/` | 本地 `usage/` 用量面板及 `usage-overlay.ts` 兼容入口；其他工作流改用社区包 |
-| `npm/` | `packages` 字段中 `npm:` 包的安装目录（node_modules 完整依赖树） |
+| `extensions/` | 本地 `usage/` 用量面板、`tps/` 速率遥测、`gpt-fast.ts` 及 `usage-overlay.ts` 兼容入口 |
+| `npm/` | `packages` 字段中 `npm:` 包的安装目录；`package.json` 与 `package-lock.json` 记录当前依赖 |
 | `sessions/` | 会话存储 |
 | `missions/` | 历史 autopilot 工件（保留数据，不再由已移除扩展更新） |
 | `.pi-reference/` | pi 安装包源码/示例的本地副本（含 dist 与 examples），离线查实现用 |
@@ -38,3 +38,5 @@
 - 系统提示注入：内置提示 → `APPEND_SYSTEM.md`（如存在）→ `AGENTS.md`（如存在）→ skills 描述（渐进披露，按需 read）。
 - skills 发现位置：`~/.pi/agent/skills/`、`~/.agents/skills/`、项目 `.pi/skills/`（仓库受信任后）、`settings.json` 的 `skills` 数组、`--skill` CLI 参数。同名冲突保留先发现的。
 - 当前配置包含本地 `./skills`，并自动发现社区包自带的 skills；以 `pi list` 与 `settings.json` 为准。
+- `extensions: []` 不会关闭 `extensions/` 下的自动发现资源；本地扩展仍会加载。
+- 当前不启用自主循环或持久知识库插件；移除插件不等于删除历史数据。

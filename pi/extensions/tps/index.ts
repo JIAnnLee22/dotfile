@@ -1,11 +1,9 @@
 /**
  * Local pi-tps — based on @monotykamary/pi-tps 1.3.16 (MIT).
- * Adds a one-second live footer and retains upstream telemetry/export behavior.
+ * Shows conventional output-token throughput in a one-second live footer.
  *
- * Captures structured telemetry at every LLM turn (per-API-call).
- * Tracks real-time TPS via token-by-token updates, detects inference
- * stalls (GPU queuing / request queuing pauses), and persists telemetry
- * as custom entries in the session JSONL for provider debugging.
+ * TPS excludes TTFT and tool execution, but includes streaming pauses.
+ * Persists per-turn telemetry and retains upstream export commands.
  *
  * Originally from: https://github.com/badlogic/pi-mono/blob/main/.pi/extensions/tps.ts
  */
@@ -15,7 +13,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
-import type { AssistantMessage } from '@earendil-works/pi-ai';
+import type { AssistantMessage, AssistantMessageEvent } from '@earendil-works/pi-ai';
 import { estimateTokens } from '@earendil-works/pi-coding-agent';
 import type {
   ExtensionAPI,
@@ -49,6 +47,7 @@ interface MessageStartEvent {
 interface MessageUpdateEvent {
   type: 'message_update';
   message: unknown;
+  assistantMessageEvent: AssistantMessageEvent;
 }
 
 interface MessageEndEvent {
@@ -87,7 +86,7 @@ interface RateSample {
 }
 
 interface ThroughputMetrics {
-  version: 1;
+  version: 1 | 2; // v2: tps uses generation average; stalls are diagnostic only
   averageTps: number | null;
   endToEndTps: number | null;
   peakTps: number | null;
@@ -113,8 +112,8 @@ interface TurnTelemetry {
     stallCount: number; // how many discrete stall events
     messageCount: number; // assistant messages in this turn
   };
-  tps: number | null; // output / (streamMs / 1000), null when burst/degenerate
-  isPrimaryBranch: boolean; // TPS came from primary-branch (reliable) measurement
+  tps: number | null; // output / generationMs (metrics), including streaming pauses
+  isPrimaryBranch: boolean; // legacy field; v2 means generation TPS is measurable
   metrics?: ThroughputMetrics; // optional for compatibility with existing session entries
   cost: {
     input: number;
@@ -152,19 +151,41 @@ interface TurnTiming {
   activeTools: Set<string>;
   toolsStartedMs: number | null;
   toolMs: number;
-  // Inter-update TPS tracking: measures the streaming span between
-  // the first and last non-TTFT message_update events.
-  updateCount: number; // number of message_update events after the first (TTFT) one
-  firstStreamUpdateMs: number | null; // timestamp of first non-TTFT update
-  lastStreamUpdateMs: number; // timestamp of most recent non-TTFT update
+  // Only non-empty content deltas count as token-bearing stream updates.
+  updateCount: number;
+  firstStreamUpdateMs: number | null; // timestamp of first content delta
+  lastStreamUpdateMs: number; // timestamp of most recent content delta
   stallMs: number;
   stallCount: number;
   inStall: boolean;
   messageCount: number;
-  isToolCall: boolean; // tool_execution_start fired during this turn
-  isPrimaryBranch: boolean; // TPS came from primary-branch (reliable) measurement
   turnStartTimestamp: number; // wall-clock ms at turn_start, for correlating session energy entries
 }
+
+type FooterPhase =
+  | 'waiting'
+  | 'streaming'
+  | 'paused'
+  | 'tools'
+  | 'done'
+  | 'unavailable'
+  | 'interrupted';
+
+interface FooterReading {
+  phase: FooterPhase;
+  rate: number | null;
+  estimated: boolean;
+}
+
+const FOOTER_PHASES: Record<FooterPhase, { symbol: string; label: string }> = {
+  waiting: { symbol: '◌', label: '等待首个输出' },
+  streaming: { symbol: '●', label: '生成中' },
+  paused: { symbol: '◷', label: '等待流式更新' },
+  tools: { symbol: '◇', label: '工具执行中' },
+  done: { symbol: '✓', label: '生成完成' },
+  unavailable: { symbol: '○', label: '速率不可计量' },
+  interrupted: { symbol: '×', label: '生成中断或失败' },
+};
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -192,7 +213,7 @@ function formatMoney(value: number | null | undefined): string {
 /** Content estimates use a consistent basis; final usage must not cause a fake rate spike. */
 function sampleThroughput(timing: TurnTiming, now: number, estimatedOutput: number) {
   const previous = timing.rateSamples[timing.rateSamples.length - 1];
-  if (now - previous.at < FOOTER_INTERVAL_MS * 0.95) return;
+  if (!previous || now - previous.at < FOOTER_INTERVAL_MS * 0.95) return;
   const output = Math.max(previous.output, estimatedOutput);
   const baseline =
     [...timing.rateSamples].reverse().find((s) => s.at <= now - SMOOTH_WINDOW_MS) ??
@@ -358,25 +379,24 @@ export function formatDuration(totalSeconds: number): string {
  * Compose the human-readable display string from structured telemetry.
  */
 function composeDisplayString(t: TurnTelemetry, full = false): string {
-  const parts = [`TPS ${formatRate(t.tps)} tok/s`];
-  if (t.metrics) parts.push(`avg:${formatRate(t.metrics.averageTps)}`);
-  parts.push(
-    `e2e:${formatRate(t.metrics?.endToEndTps ?? tokensPerSecond(t.tokens.output, t.timing.totalMs))}`
-  );
-  if (full) parts.push(`peak:${formatRate(t.metrics?.peakTps, t.metrics?.peakEstimated ?? true)}`);
+  // v1's average already used the conventional denominator. Never relabel the
+  // old stall-adjusted tps as a standard measurement when rehydrating history.
+  const parts = [`TPS ${formatRate(t.metrics?.averageTps)} tok/s`];
   if (t.timing.ttftMs !== null) parts.push(`TTFT ${formatDuration(t.timing.ttftMs / 1000)}`);
   parts.push(`out ${formatNumber(t.tokens.output)}`);
-  const hit =
-    t.metrics?.cacheHitPercent ??
-    cacheHitPercent(t.tokens.input, t.tokens.cacheRead, t.tokens.cacheWrite);
-  if (hit !== null) parts.push(`cache:${hit.toFixed(0)}%`);
-  if (t.timing.stallMs > 0)
-    parts.push(`stall ${formatDuration(t.timing.stallMs / 1000)}×${t.timing.stallCount}`);
   if (full) {
-    parts.push(`time ${formatDuration(t.timing.totalMs / 1000)}`);
     parts.push(
+      `e2e:${formatRate(t.metrics?.endToEndTps ?? tokensPerSecond(t.tokens.output, t.timing.totalMs))}`,
+      `peak:${formatRate(t.metrics?.peakTps, t.metrics?.peakEstimated ?? true)}`,
+      `time ${formatDuration(t.timing.totalMs / 1000)}`,
       `in ${formatNumber(t.tokens.input)} R:${formatNumber(t.tokens.cacheRead)} W:${formatNumber(t.tokens.cacheWrite)}`
     );
+    const hit =
+      t.metrics?.cacheHitPercent ??
+      cacheHitPercent(t.tokens.input, t.tokens.cacheRead, t.tokens.cacheWrite);
+    if (hit !== null) parts.push(`cache:${hit.toFixed(0)}%`);
+    if (t.timing.stallMs > 0)
+      parts.push(`stall ${formatDuration(t.timing.stallMs / 1000)}×${t.timing.stallCount}`);
     if (t.metrics?.toolMs) parts.push(`tool ${formatDuration(t.metrics.toolMs / 1000)}`);
     parts.push(`cost ${formatMoney(t.metrics?.costUsd ?? t.cost?.total)}`);
     if (t.rateUsdPerMTokens != null) parts.push(`$${t.rateUsdPerMTokens.toFixed(2)}/M`);
@@ -384,19 +404,21 @@ function composeDisplayString(t: TurnTelemetry, full = false): string {
   return parts.join(' · ');
 }
 
-function composeDetails(t: TurnTelemetry): string {
+function composeDetails(t: TurnTelemetry, outcome: 'done' | 'interrupted' = 'done'): string {
   const hit =
     t.metrics?.cacheHitPercent ??
     cacheHitPercent(t.tokens.input, t.tokens.cacheRead, t.tokens.cacheWrite);
   const source = t.metrics?.costSource === 'billed' ? '账单' : t.cost ? '目录估价' : '未知';
   return [
     `TPS · ${t.model.provider}/${t.model.modelId}`,
-    `速率 tok/s：修正生成 ${formatRate(t.tps)} · 生成平均 ${formatRate(t.metrics?.averageTps)} · 端到端 ${formatRate(t.metrics?.endToEndTps ?? tokensPerSecond(t.tokens.output, t.timing.totalMs))} · 1s 峰值 ${formatRate(t.metrics?.peakTps, t.metrics?.peakEstimated ?? true)}`,
+    `状态：${FOOTER_PHASES[outcome].label}`,
+    `速率 tok/s：TPS ${formatRate(t.metrics?.averageTps)} · 端到端 ${formatRate(t.metrics?.endToEndTps ?? tokensPerSecond(t.tokens.output, t.timing.totalMs))} · 1s 峰值 ${formatRate(t.metrics?.peakTps, t.metrics?.peakEstimated ?? true)}`,
     `延迟：TTFT ${t.timing.ttftMs === null ? '—' : formatDuration(t.timing.ttftMs / 1000)} · 总耗时 ${formatDuration(t.timing.totalMs / 1000)} · 生成 ${t.metrics ? formatDuration(t.metrics.generationMs / 1000) : '—'} · 工具 ${t.metrics ? formatDuration(t.metrics.toolMs / 1000) : '—'}`,
     `用量 token：非缓存输入 ${formatNumber(t.tokens.input)} · 输出 ${formatNumber(t.tokens.output)} · 缓存读 ${formatNumber(t.tokens.cacheRead)} / 写 ${formatNumber(t.tokens.cacheWrite)} · 合计 ${formatNumber(t.tokens.total)}`,
     `缓存命中 ${hit === null ? '—' : `${hit.toFixed(1)}%`} · 停顿 ${formatDuration(t.timing.stallMs / 1000)}×${t.timing.stallCount} · 消息 ${t.timing.messageCount} · 流更新 ${t.metrics?.updateCount ?? '—'}`,
     `费用 ${formatMoney(t.metrics?.costUsd ?? t.cost?.total)}（${source}）${t.rateUsdPerMTokens == null ? '' : ` · $${t.rateUsdPerMTokens.toFixed(2)}/M`}`,
-    '~ 为内容估算；修正生成沿用停顿扣除/保守回退算法，生成平均不扣停顿，端到端包括等待与工具时间。',
+    '~ 为内容估算；TPS = 输出 token / 生成秒数，排除首字等待和工具时间，不扣生成中的停顿；端到端包括等待与工具时间。',
+    ...(!t.metrics ? ['此历史记录未保存标准生成时长，TPS 无法重算；导出保留原始数据。'] : []),
   ].join('\n');
 }
 
@@ -442,143 +464,24 @@ function buildTelemetry(
   }
 
   if (output <= 0) return null;
-  if (!timing.firstTokenMs) return null;
+  if (timing.firstTokenMs === null) return null;
   if (!model) return null;
 
   const totalMs = turnEndMs - timing.turnStartMs;
 
-  // Inter-update TPS: measures the streaming span between the first and
-  // last non-TTFT message_update events.
-  //
-  // Three-branch gate:
-  //   Primary:   ≥5 updates, avg inter-chunk gap ≥1ms → streamMs is genuine
-  //              generation timing, not buffer-flush dispatch overhead.
-  //   Fallback:  ≥2 updates, totalGenerationMs ≥50ms → conservative rate
-  //              using the full generation window (includes TTFT, so it
-  //              underestimates — by design, to avoid overshooting).
-  //   Else:      null — structurally unidentifiable.
-  //
-  // The avg inter-chunk gap is the key signal: buffer flushes dispatch
-  // chunks with ~0.3–0.5ms gaps (network overhead only), while genuine
-  // streaming at 3000 TPS with 5-token chunks has ~1.7ms gaps. A 1ms
-  // threshold cleanly separates the two regimes without capping TPS by
-  // magnitude — a legitimate 5000 TPS provider with 10-token chunks
-  // still passes (2ms gaps), and future faster hardware with larger
-  // batches passes too.
-  const MIN_STREAM_MS = 1;
-  const MIN_STREAM_UPDATES = 5;
-  const MIN_INTER_CHUNK_MS = 1;
-  const MIN_GENERATION_MS = 200;
-  const ACTIVE_TIME_THRESHOLD_MS = 200;
-  const STALL_REDUCTION_DENOM = 2;
-  const STALL_DOMINANCE_RATIO = 0.85;
-
-  // Maximum plausible generation speed (tokens/second). Beyond this, the
-  // measured TPS is almost certainly a measurement artifact — the effective
-  // generation window is too short relative to the token volume to
-  // distinguish genuine inference from a buffer-flush dispatch of
-  // pre-generated tokens. At 10_000 TPS this is 5× the fastest known
-  // commercial inference (Cerebras ~2_000 tok/s). The gate is phrased as
-  // "extraordinary claims require extraordinary evidence": for X output
-  // tokens, the minimum reliable measurement window is X / MAX_PLAUSIBLE_TPS
-  // seconds. Below that, the volume of tokens cannot be reliably timed, and
-  // TPS is set to null. This is mathematically equivalent to nulling out
-  // TPS when computed TPS > MAX_PLAUSIBLE_TPS.
-  const MAX_PLAUSIBLE_TPS = 10_000;
-
   const streamMs =
-    timing.updateCount > 0 && timing.firstStreamUpdateMs !== null
-      ? timing.lastStreamUpdateMs - timing.firstStreamUpdateMs
+    timing.firstStreamUpdateMs === null
+      ? null
+      : timing.lastStreamUpdateMs - timing.firstStreamUpdateMs;
+
+  // Conventional per-request generation throughput, not a reconstructed
+  // "active inference" speed: retain all pauses inside the generation span.
+  // A single burst cannot establish a streaming rate. No model-history or
+  // tool-call cap is applied; short/degenerate windows remain unavailable.
+  const tps =
+    timing.updateCount >= 2 && streamMs !== null && streamMs >= 200
+      ? tokensPerSecond(output, timing.generationOutputMs)
       : null;
-
-  const avgInterChunkGap =
-    streamMs !== null && timing.updateCount > 1 ? streamMs / (timing.updateCount - 1) : 0;
-
-  // ── Generation TPS ────────────────────────────────────────────────────
-  // Raw inference speed: output / (active streaming time / 1000).
-  // Excludes BOTH TTFT and known stalls — this is the speed at which the
-  // model was actually producing tokens during active generation.
-  //
-  // The stall-before-stream bug: when a stall occurs between TTFT and the
-  // first stream update, firstStreamUpdateMs is set AFTER the stall, making
-  // streamMs only cover the post-stall burst. Subtracting stallMs from
-  // streamMs gives the "active generation" span, but when stallMs ≥ streamMs
-  // the result is unreliable — the post-stall cluster could be a buffer-flush
-  // dispatch of pre-generated tokens, not sustained inference.
-  //
-  // Three guard conditions prevent inflation:
-  //  1. stallMs < streamMs: prevents stall-before-stream where
-  //     firstStreamUpdateMs lands AFTER the stall.
-  //  2. effectiveStreamMs >= 50ms: the active span must be long enough to
-  //     distinguish genuine generation from a dispatch artifact.
-  //  3. stallMs < effectiveStreamMs: when stalls exceed active generation
-  //     time (e.g. 998ms stall, 53ms active), the "active" span is likely
-  //     a buffer-flush burst of pre-generated tokens, not sustained
-  //     inference. Requiring stall time < active time ensures the
-  //     streaming window is dominated by generation, not stalls.
-  //
-  // Three-branch gate:
-  //   Primary:   all 3 guards pass → output / (effectiveStreamMs / 1000)
-  //   Fallback:  ≥2 updates, generationMs ≥50ms
-  //              → output / (effectiveGenMs / 1000)
-  //              Includes TTFT, underestimates, but never overshoots.
-  //   Else:      null — structurally unidentifiable.
-  let tps: number | null = null;
-  let isPrimaryBranch = false;
-  if (
-    streamMs !== null &&
-    streamMs >= MIN_STREAM_MS &&
-    timing.updateCount >= MIN_STREAM_UPDATES &&
-    avgInterChunkGap >= MIN_INTER_CHUNK_MS &&
-    timing.stallMs < streamMs && // stalls must not dominate streaming span
-    streamMs - timing.stallMs >= MIN_GENERATION_MS && // effective span must be measurable
-    timing.stallMs < streamMs - timing.stallMs // stall time < active time
-  ) {
-    // Active generation time: streaming window minus known stalls.
-    // streamMs already excludes TTFT; subtracting stallMs gives the
-    // time the model was actually generating tokens.
-    const effectiveStreamMs = streamMs - timing.stallMs;
-    const raw = output / (effectiveStreamMs / 1000);
-    tps = Math.round(raw * 10) / 10;
-    isPrimaryBranch = true;
-  } else if (timing.updateCount >= 2 && timing.totalGenerationMs >= MIN_GENERATION_MS) {
-    // Fallback: use generationMs (message_start → message_end) minus
-    // stalls. This includes TTFT, so it underestimates generation speed,
-    // but it's safe — no inflation possible.
-    let effectiveGenMs = timing.totalGenerationMs - timing.stallMs;
-    const stallsDominate =
-      effectiveGenMs < ACTIVE_TIME_THRESHOLD_MS ||
-      timing.stallMs > timing.totalGenerationMs * STALL_DOMINANCE_RATIO;
-    if (stallsDominate) {
-      effectiveGenMs = Math.max(
-        timing.totalGenerationMs - timing.stallMs / STALL_REDUCTION_DENOM,
-        MIN_GENERATION_MS
-      );
-    } else {
-      effectiveGenMs = Math.max(effectiveGenMs, MIN_GENERATION_MS);
-    }
-    const raw = output / (effectiveGenMs / 1000);
-    tps = Math.round(raw * 10) / 10;
-  } else {
-    tps = null;
-  }
-
-  // Volume-based sanity gate: extraordinary TPS claims require
-  // proportionally longer measurement windows. When a provider emits a
-  // large volume of tokens in a short time window, the measured rate is
-  // dominated by dispatch/buffer-flush timing rather than actual inference
-  // speed. For X output tokens, the minimum reliable generation window is
-  // X / MAX_PLAUSIBLE_TPS seconds — below that, the volume of tokens cannot
-  // be reliably timed, and TPS is set to null.
-  //
-  // Mathematically equivalent to: computed TPS > MAX_PLAUSIBLE_TPS → null.
-  // But phrased as a measurement-reliability principle: the evidence
-  // (effective window duration) must be proportional to the claim (token
-  // volume ÷ inferred rate).
-  if (tps !== null && tps > MAX_PLAUSIBLE_TPS) {
-    tps = null;
-    isPrimaryBranch = false;
-  }
 
   // Single blended $/M-tokens rate for the banner. Cost source: Neuralwatt's
   // billed cost when present (energy-based, what the user actually pays),
@@ -604,17 +507,17 @@ function buildTelemetry(
       messageCount: timing.messageCount,
     },
     tps,
-    isPrimaryBranch,
+    isPrimaryBranch: tps !== null,
     metrics: {
-      version: 1,
-      averageTps: tokensPerSecond(output, timing.generationOutputMs),
+      version: 2,
+      averageTps: tps,
       endToEndTps: tokensPerSecond(output, totalMs),
       peakTps: timing.peakTps,
       peakEstimated: true,
       generationMs: timing.generationOutputMs,
       toolMs:
         timing.toolMs + (timing.toolsStartedMs === null ? 0 : turnEndMs - timing.toolsStartedMs),
-      updateCount: timing.updateCount + 1,
+      updateCount: timing.updateCount,
       cacheHitPercent: cacheHitPercent(input, cacheRead, cacheWrite),
       costUsd: effectiveCost,
       costSource:
@@ -647,11 +550,44 @@ export default function tpsExtension(pi: ExtensionAPI) {
   let lastTelemetry: TurnTelemetry | null = null;
   let lastLegacyStatus: string | undefined;
   let liveDetails: string | undefined;
+  let lastReading: FooterReading | null = null;
+  let lastOutcome: 'done' | 'interrupted' = 'done';
+
+  function showMinimalFooter(ctx: ExtensionContext, reading: FooterReading) {
+    lastReading = reading;
+    const value = formatRate(reading.rate, reading.estimated);
+    // Attribute-only styling follows the terminal palette and stays valid
+    // across idle theme changes: no baked-in foreground/background colors.
+    const number = ctx.mode === 'tui' ? ctx.ui.theme.style(value, { bold: true }) : value;
+    const unit = ctx.mode === 'tui' ? ctx.ui.theme.style('tok/s', { dim: true }) : 'tok/s';
+    setFooterStatus(ctx, `${FOOTER_PHASES[reading.phase].symbol} ${number} ${unit}`);
+  }
 
   function showTelemetry(ctx: ExtensionContext, telemetry: TurnTelemetry) {
     lastTelemetry = telemetry;
     liveDetails = undefined;
-    setFooterStatus(ctx, composeDisplayString(telemetry, footerFull));
+    const rate = telemetry.metrics?.averageTps ?? null;
+    lastReading = {
+      phase: lastOutcome === 'interrupted' ? 'interrupted' : rate === null ? 'unavailable' : 'done',
+      rate,
+      estimated: false,
+    };
+    if (footerFull) setFooterStatus(ctx, composeDisplayString(telemetry, true));
+    else showMinimalFooter(ctx, lastReading);
+  }
+
+  function showLegacyStatus(ctx: ExtensionContext, message: string) {
+    if (footerFull) setFooterStatus(ctx, message);
+    else showMinimalFooter(ctx, { phase: 'unavailable', rate: null, estimated: false });
+  }
+
+  function showUnavailable(ctx: ExtensionContext, interrupted = false) {
+    lastReading = { phase: interrupted ? 'interrupted' : 'unavailable', rate: null, estimated: false };
+    liveDetails = interrupted
+      ? 'TPS · 生成已中断或失败，未取得可保留的速率。'
+      : 'TPS · 本轮没有可计量的流式输出。';
+    if (footerFull) setFooterStatus(ctx, liveDetails);
+    else showMinimalFooter(ctx, lastReading);
   }
 
   function setFooterStatus(ctx: ExtensionContext, text: string | undefined) {
@@ -669,15 +605,22 @@ export default function tpsExtension(pi: ExtensionAPI) {
     if (!ctx.hasUI || !currentTiming) return;
     const now = performance.now();
     const elapsed = formatDuration((now - currentTiming.turnStartMs) / 1000);
-    if (sample) {
+    if (sample && liveMessageFirstTokenMs !== null) {
       const estimatedOutput =
         currentTiming.assistantMessages.reduce((sum, message) => sum + estimateTokens(message), 0) +
         (liveMessage ? estimateTokens(liveMessage) : 0);
       sampleThroughput(currentTiming, now, estimatedOutput);
     }
     if (currentTiming.firstTokenMs === null) {
-      liveDetails = `TPS 等待首个输出 · TTFT ${elapsed}`;
-      setFooterStatus(ctx, liveDetails);
+      // A provider can deliver a complete tool call without content deltas.
+      // Show execution rather than claiming we are still waiting for output.
+      const phase = currentTiming.activeTools.size > 0 ? 'tools' : 'waiting';
+      liveDetails = phase === 'tools'
+        ? 'TPS · 工具执行中 · 尚无可计量的流式内容。'
+        : `TPS · 等待首个输出 · TTFT ${elapsed}`;
+      lastReading = { phase, rate: null, estimated: false };
+      if (footerFull) setFooterStatus(ctx, liveDetails);
+      else showMinimalFooter(ctx, lastReading);
       return;
     }
 
@@ -699,7 +642,14 @@ export default function tpsExtension(pi: ExtensionAPI) {
     const generationMs =
       currentTiming.generationOutputMs +
       (liveMessageFirstTokenMs === null ? 0 : now - liveMessageFirstTokenMs);
-    const average = tokensPerSecond(output, generationMs);
+    const streamMs =
+      currentTiming.firstStreamUpdateMs === null
+        ? 0
+        : currentTiming.lastStreamUpdateMs - currentTiming.firstStreamUpdateMs;
+    const average =
+      currentTiming.updateCount >= 2 && streamMs >= 200
+        ? tokensPerSecond(output, generationMs)
+        : null;
     const endToEnd = tokensPerSecond(output, now - currentTiming.turnStartMs);
     const ttft = formatDuration((currentTiming.firstTokenMs - currentTiming.turnStartMs) / 1000);
     const messages = [...currentTiming.assistantMessages, ...(liveMessage ? [liveMessage] : [])];
@@ -715,31 +665,43 @@ export default function tpsExtension(pi: ExtensionAPI) {
       currentTiming.toolMs +
       (currentTiming.toolsStartedMs === null ? 0 : now - currentTiming.toolsStartedMs);
     const knownCost = messages.reduce((sum, m) => sum + (m.usage.cost?.total || 0), 0);
-    const rates =
-      `TPS 1s:${formatRate(currentTiming.instantTps, true)} 3s:${formatRate(currentTiming.smoothedTps, true)}` +
-      ` avg:${formatRate(average, estimated)} e2e:${formatRate(endToEnd, estimated)}`;
+    const rates = `TPS ${formatRate(average, estimated)} tok/s`;
     const summary = [`TTFT ${ttft}`, `out ${estimated ? '~' : ''}${formatNumber(output)}`];
-    if (hit !== null) summary.push(`cache:${hit.toFixed(0)}%`);
-    if (stallMs > 0) summary.push(`stall ${formatDuration(stallMs / 1000)}×${stallCount}`);
     const extra = [
+      `1s:${formatRate(currentTiming.instantTps, true)}`,
+      `3s:${formatRate(currentTiming.smoothedTps, true)}`,
+      `e2e:${formatRate(endToEnd, estimated)}`,
       `peak:${formatRate(currentTiming.peakTps, true)}`,
       `time ${elapsed}`,
       `in ${input + cacheRead + cacheWrite > 0 ? formatNumber(input) : '—'} R:${formatNumber(cacheRead)} W:${formatNumber(cacheWrite)}`,
-      `tool ${formatDuration(toolMs / 1000)}`,
-      `cost ${formatMoney(knownCost > 0 ? knownCost : null)}`,
     ];
+    if (hit !== null) extra.push(`cache:${hit.toFixed(0)}%`);
+    if (stallMs > 0) extra.push(`stall ${formatDuration(stallMs / 1000)}×${stallCount}`);
+    extra.push(
+      `tool ${formatDuration(toolMs / 1000)}`,
+      `cost ${formatMoney(knownCost > 0 ? knownCost : null)}`
+    );
+    const phase: FooterPhase =
+      currentTiming.activeTools.size > 0
+        ? 'tools'
+        : liveMessage === null
+          ? 'done'
+          : liveMessageFirstTokenMs === null
+            ? 'waiting'
+            : openStall
+              ? 'paused'
+              : 'streaming';
+    lastReading = { phase, rate: average, estimated };
     liveDetails = [
-      rates,
+      `${rates} · ${FOOTER_PHASES[phase].label}`,
       summary.join(' · '),
       extra.join(' · '),
-      `流更新 ${currentTiming.updateCount + 1} · 消息 ${currentTiming.messageCount} · 速率单位 tok/s；~ 为估算，最终用量尚未定稿。`,
+      `流更新 ${currentTiming.updateCount} · 消息 ${currentTiming.messageCount} · 速率单位 tok/s；~ 为估算，最终用量尚未定稿。`,
+      'TPS = 输出 token / 生成秒数；排除首字等待和工具时间，不扣生成中的停顿。',
     ].join('\n');
-    setFooterStatus(ctx, [rates, ...summary, ...(footerFull ? extra : [])].join(' · '));
+    if (footerFull) setFooterStatus(ctx, [rates, ...summary, ...extra].join(' · '));
+    else showMinimalFooter(ctx, lastReading);
   }
-
-  // Per-model TPS cap: highest reliable (primary-branch, non-tool-call) TPS observed.
-  // Tool-call turns get clamped to this value. Only set by reliable streaming measurements.
-  const tpsCaps = new Map<string, number>(); // "provider:modelId" → cap
 
   // Cached session entries for argument completion (captured on session_start / session_tree)
   let cachedEntries: Array<{ type?: string; customType?: string; data?: unknown }> = [];
@@ -806,6 +768,8 @@ export default function tpsExtension(pi: ExtensionAPI) {
     lastTelemetry = null;
     lastLegacyStatus = undefined;
     liveDetails = undefined;
+    lastReading = null;
+    lastOutcome = 'done';
     const entries = ctx.sessionManager.getBranch();
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
@@ -818,7 +782,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
       }
       if (typeof data.message === 'string') {
         lastLegacyStatus = data.message;
-        setFooterStatus(ctx, data.message);
+        showLegacyStatus(ctx, data.message);
         return;
       }
     }
@@ -850,7 +814,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
   });
   pi.on('agent_end', (_event, ctx) => {
     // Abort/failure may end a run without a telemetry-producing turn_end.
-    if (currentTiming) setFooterStatus(ctx, 'TPS —');
+    if (currentTiming) showUnavailable(ctx, true);
     stopFooterUpdates();
     currentTiming = null;
   });
@@ -865,6 +829,8 @@ export default function tpsExtension(pi: ExtensionAPI) {
     lastTelemetry = null;
     lastLegacyStatus = undefined;
     liveDetails = undefined;
+    lastReading = null;
+    lastOutcome = 'done';
     currentTiming = {
       turnIndex: _event.turnIndex,
       turnStartMs: performance.now(),
@@ -875,7 +841,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
       assistantMessages: [],
       totalGenerationMs: 0,
       generationOutputMs: 0,
-      rateSamples: [{ at: performance.now(), output: 0 }],
+      rateSamples: [],
       instantTps: null,
       smoothedTps: null,
       peakTps: null,
@@ -889,8 +855,6 @@ export default function tpsExtension(pi: ExtensionAPI) {
       stallCount: 0,
       inStall: false,
       messageCount: 0,
-      isToolCall: false,
-      isPrimaryBranch: false,
     };
     if (ctx.hasUI) {
       updateLiveFooter(ctx);
@@ -899,9 +863,8 @@ export default function tpsExtension(pi: ExtensionAPI) {
     }
   });
 
-  // Track when a message starts. In pi, message_start fires at stream
-  // creation (before any tokens), so we defer TTFT to the first
-  // message_update which carries the first real token.
+  // message_start precedes content. TTFT starts at the first non-empty
+  // text/thinking/tool-call delta, not an empty block-start event.
   pi.on('message_start', (event: MessageStartEvent) => {
     if (!currentTiming) return;
     if (!isAssistantMessage(event.message)) return;
@@ -920,32 +883,47 @@ export default function tpsExtension(pi: ExtensionAPI) {
     currentTiming.inStall = false;
   });
 
-  // Track token-by-token updates during streaming (real-time TPS & stall detection).
-  // The first message_update is the effective first token (message_start fires
-  // at stream creation, before any content arrives).
-  pi.on('message_update', (event: MessageUpdateEvent) => {
-    if (!currentTiming) return;
-    if (!isAssistantMessage(event.message)) return;
-
-    const now = performance.now();
+  // Empty block starts/ends are not tokens. Count text, thinking and tool JSON
+  // deltas so TTFT and generation duration use the same output boundary.
+  pi.on('message_update', (event: MessageUpdateEvent, ctx: ExtensionContext) => {
+    if (!currentTiming || !isAssistantMessage(event.message)) return;
     liveMessage = event.message;
-    if (liveMessageFirstTokenMs === null) liveMessageFirstTokenMs = now;
-
-    // First token: capture TTFT and seed stall timing, then bail.
-    // No stall detection on this event — the gap from message_start to
-    // first message_update is provider parsing overhead, not a stall.
-    if (currentTiming.firstTokenMs === null) {
-      currentTiming.firstTokenMs = now;
-      currentTiming.lastUpdateMs = now;
+    const delta = event.assistantMessageEvent;
+    if (
+      (delta.type !== 'text_delta' &&
+        delta.type !== 'thinking_delta' &&
+        delta.type !== 'toolcall_delta') ||
+      delta.delta.length === 0
+    ) {
       return;
     }
 
-    // Track inter-update streaming span for TPS calculation
+    const now = performance.now();
     currentTiming.updateCount++;
-    if (currentTiming.firstStreamUpdateMs === null) {
-      currentTiming.firstStreamUpdateMs = now;
-    }
+    currentTiming.firstStreamUpdateMs ??= now;
     currentTiming.lastStreamUpdateMs = now;
+
+    // Seed each message separately: neither TTFT nor message/tool gaps should
+    // dilute the generation rate or count as a streaming pause.
+    if (liveMessageFirstTokenMs === null) {
+      liveMessageFirstTokenMs = now;
+      currentTiming.firstTokenMs ??= now;
+      currentTiming.lastUpdateMs = now;
+      currentTiming.rateSamples = [
+        {
+          at: now,
+          output:
+            currentTiming.assistantMessages.reduce(
+              (sum, message) => sum + estimateTokens(message),
+              0
+            ) + estimateTokens(event.message),
+        },
+      ];
+      currentTiming.instantTps = null;
+      currentTiming.smoothedTps = null;
+      updateLiveFooter(ctx);
+      return;
+    }
 
     const gap = now - currentTiming.lastUpdateMs;
 
@@ -964,25 +942,25 @@ export default function tpsExtension(pi: ExtensionAPI) {
     currentTiming.lastUpdateMs = now;
   });
 
-  // Track when a tool starts executing — marks this turn as a tool call
-  // for the dynamic TPS cap (tool-call turns only get capped, never set the cap).
-  pi.on('tool_execution_start', (_event: ToolExecutionStartEvent) => {
+  // Tool execution is diagnostic only; it never caps generation throughput.
+  pi.on('tool_execution_start', (_event: ToolExecutionStartEvent, ctx: ExtensionContext) => {
     if (!currentTiming) return;
-    currentTiming.isToolCall = true;
     if (currentTiming.activeTools.size === 0) currentTiming.toolsStartedMs = performance.now();
     currentTiming.activeTools.add(_event.toolCallId);
+    updateLiveFooter(ctx);
   });
 
-  pi.on('tool_execution_end', (event) => {
+  pi.on('tool_execution_end', (event, ctx) => {
     if (!currentTiming || !currentTiming.activeTools.delete(event.toolCallId)) return;
     if (currentTiming.activeTools.size === 0 && currentTiming.toolsStartedMs !== null) {
       currentTiming.toolMs += performance.now() - currentTiming.toolsStartedMs;
       currentTiming.toolsStartedMs = null;
     }
+    updateLiveFooter(ctx);
   });
 
   // Track when a message ends
-  pi.on('message_end', (event: MessageEndEvent) => {
+  pi.on('message_end', (event: MessageEndEvent, ctx: ExtensionContext) => {
     if (!currentTiming) return;
     if (!isAssistantMessage(event.message)) return;
 
@@ -992,8 +970,8 @@ export default function tpsExtension(pi: ExtensionAPI) {
     liveMessage = null;
     liveMessageFirstTokenMs = null;
 
-    // Accumulate ACTUAL streaming time for this message (true generation time)
-    if (currentTiming.currentMessageStartMs) {
+    // Retain the legacy message_start → message_end timing for exports.
+    if (currentTiming.currentMessageStartMs !== null) {
       const messageGenerationMs = now - currentTiming.currentMessageStartMs;
       currentTiming.totalGenerationMs += messageGenerationMs;
       currentTiming.currentMessageStartMs = null;
@@ -1002,6 +980,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
     // Store this message to count its tokens later (only current turn's messages)
     currentTiming.assistantMessages.push(event.message);
     currentTiming.lastUpdateMs = now;
+    updateLiveFooter(ctx);
   });
 
   // ── Persist telemetry ───────────────────────────────────────────────────
@@ -1035,32 +1014,15 @@ export default function tpsExtension(pi: ExtensionAPI) {
       billedCost = findEnergyCostFromSession(ctx, timing.turnStartTimestamp);
     }
 
+    lastOutcome =
+      isAssistantMessage(event.message) &&
+      (event.message.stopReason === 'aborted' || event.message.stopReason === 'error')
+        ? 'interrupted'
+        : 'done';
     const telemetry = buildTelemetry(timing, turnEndMs, billedCost);
     if (!telemetry) {
-      setFooterStatus(ctx, 'TPS —');
+      showUnavailable(ctx, lastOutcome === 'interrupted');
       return;
-    }
-
-    // ── Dynamic TPS cap ────────────────────────────────────────────────
-    // Only non-tool-call, primary-branch (reliable) measurements set the cap.
-    // Tool-call turns get clamped to the cap to prevent inflation from
-    // short outputs over tiny time windows.
-    const modelKey = `${telemetry.model.provider}:${telemetry.model.modelId}`;
-
-    if (telemetry.isPrimaryBranch && telemetry.tps !== null) {
-      const currentCap = tpsCaps.get(modelKey);
-      if (currentCap === undefined || telemetry.tps > currentCap) {
-        tpsCaps.set(modelKey, telemetry.tps);
-      }
-    }
-
-    if (timing.isToolCall && telemetry.tps !== null) {
-      const cap = tpsCaps.get(modelKey);
-      if (cap !== undefined) {
-        telemetry.tps = Math.min(telemetry.tps, cap);
-      } else {
-        telemetry.tps = null;
-      }
     }
 
     // Record this turn so a late-arriving neuralwatt:turn-energy event
@@ -1088,7 +1050,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand('tps', {
-    description: '查看多维 TPS 详情，或切换页脚：/tps [compact|full]',
+    description: '查看 TPS 详情；compact 极简单值 / full 诊断页脚',
     getArgumentCompletions: (prefix) =>
       ['compact', 'full']
         .filter((s) => s.startsWith(prefix))
@@ -1102,14 +1064,18 @@ export default function tpsExtension(pi: ExtensionAPI) {
       if (mode) footerFull = mode === 'full';
       if (currentTiming) updateLiveFooter(ctx);
       else if (lastTelemetry) showTelemetry(ctx, lastTelemetry);
-      else if (lastLegacyStatus) setFooterStatus(ctx, lastLegacyStatus);
+      else if (lastLegacyStatus) showLegacyStatus(ctx, lastLegacyStatus);
+      else if (lastReading) {
+        if (footerFull) setFooterStatus(ctx, liveDetails);
+        else showMinimalFooter(ctx, lastReading);
+      }
       if (!mode)
         ctx.ui.notify(
           currentTiming
             ? (liveDetails ?? '等待输出。')
             : lastTelemetry
-              ? composeDetails(lastTelemetry)
-              : (lastLegacyStatus ?? '当前分支暂无 TPS 记录。'),
+              ? composeDetails(lastTelemetry, lastOutcome)
+              : (lastLegacyStatus ?? liveDetails ?? '当前分支暂无 TPS 记录。'),
           'info'
         );
     },
