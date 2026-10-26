@@ -19,7 +19,7 @@ description: pi coding agent 本机配置与工具手册：settings.json、当�
 
 - 配置文件主目录：`~/.pi/agent` 是符号链接，实际指向 `~/nixos-config/dotfile/pi`（git 仓库，可版本化管理非敏感配置）。
 - 核心文件：`settings.json`（主配置）、`AGENTS.md` / `APPEND_SYSTEM.md`（注入系统提示）、`models.json`（模型/provider 配置）、`auth.json`（凭据，不入库）。
-- 已装社区扩展见 `settings.json` 的 `packages` 字段：文件搜索、网页访问、待办、Antigravity、人工审批计划与子代理；不启用自主循环或持久知识库。本地扩展包括 `extensions/usage/`、`extensions/tps/`、`extensions/gpt-fast.ts` 及用量兼容入口。
+- 已装社区扩展见 `settings.json` 的 `packages` 字段：文件搜索、网页访问、待办、Antigravity、人工审批计划与子代理；不启用自主循环或持久知识库。本地扩展包括 `extensions/usage/`、`extensions/tps/`、`extensions/input-translate/`、`extensions/gpt-fast.ts` 及用量兼容入口。输入翻译默认开启，以最便宜可用 Codex 模型前置英译，主模型默认中文回复；`/translate on|off|status` 控制，5 秒超时发送原文。
 - 自定义 skills 在 `./skills`（即 `~/.pi/agent/skills/`），每个子目录一个 `SKILL.md`；`/skill:名称` 可强制加载。
 - 修改配置后无需重启立即生效的项：`tuiMode` 等；多数 settings 项需重启 TUI 生效。
 

@@ -22,7 +22,7 @@
 | 路径 | 用途 |
 |------|------|
 | `skills/` | 自定义 skills（settings.json `"skills": ["./skills"]` 注册），每个子目录一个 `SKILL.md` |
-| `extensions/` | 本地 `usage/` 用量面板、`tps/` 速率遥测、`gpt-fast.ts` 及 `usage-overlay.ts` 兼容入口 |
+| `extensions/` | 本地 `usage/` 用量面板、`tps/` 速率遥测、`input-translate/` 前置英译、`gpt-fast.ts` 及 `usage-overlay.ts` 兼容入口 |
 | `npm/` | `packages` 字段中 `npm:` 包的安装目录；`package.json` 与 `package-lock.json` 记录当前依赖 |
 | `sessions/` | 会话存储 |
 | `missions/` | 历史 autopilot 工件（保留数据，不再由已移除扩展更新） |

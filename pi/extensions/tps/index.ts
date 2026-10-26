@@ -8,7 +8,7 @@
  * Originally from: https://github.com/badlogic/pi-mono/blob/main/.pi/extensions/tps.ts
  */
 
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import { writeFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -208,6 +208,18 @@ function cacheHitPercent(input: number, read: number, write: number): number | n
 
 function formatMoney(value: number | null | undefined): string {
   return value != null && Number.isFinite(value) ? `$${value.toFixed(value < 0.01 ? 5 : 3)}` : '—';
+}
+
+function openDirectory(dir: string): void {
+  const platform = process.platform;
+  const opener = platform === 'darwin' ? 'open' : platform === 'win32' ? 'explorer' : 'xdg-open';
+  try {
+    const child = spawn(opener, [dir], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
+    child.unref();
+  } catch {
+    // opener not available — ignore silently
+  }
 }
 
 /** Content estimates use a consistent basis; final usage must not cause a fake rate spike. */
@@ -429,7 +441,8 @@ function composeDetails(t: TurnTelemetry, outcome: 'done' | 'interrupted' = 'don
 function buildTelemetry(
   timing: TurnTiming,
   turnEndMs: number,
-  billedCost: number | null = null
+  billedCost: number | null = null,
+  fallbackModel: { provider: string; modelId: string } | null = null
 ): TurnTelemetry | null {
   let input = 0;
   let output = 0;
@@ -465,6 +478,9 @@ function buildTelemetry(
 
   if (output <= 0) return null;
   if (timing.firstTokenMs === null) return null;
+  if (!model && fallbackModel) {
+    model = fallbackModel;
+  }
   if (!model) return null;
 
   const totalMs = turnEndMs - timing.turnStartMs;
@@ -1014,12 +1030,21 @@ export default function tpsExtension(pi: ExtensionAPI) {
       billedCost = findEnergyCostFromSession(ctx, timing.turnStartTimestamp);
     }
 
+    // Guard: ensure assistant message is present even if message_end was bypassed
+    if (timing.assistantMessages.length === 0 && isAssistantMessage(event.message)) {
+      timing.assistantMessages.push(event.message);
+      if (liveMessageFirstTokenMs !== null) {
+        timing.generationOutputMs += turnEndMs - liveMessageFirstTokenMs;
+      }
+    }
+
     lastOutcome =
       isAssistantMessage(event.message) &&
       (event.message.stopReason === 'aborted' || event.message.stopReason === 'error')
         ? 'interrupted'
         : 'done';
-    const telemetry = buildTelemetry(timing, turnEndMs, billedCost);
+    const fallbackModel = ctx.model ? { provider: ctx.model.provider, modelId: ctx.model.id } : null;
+    const telemetry = buildTelemetry(timing, turnEndMs, billedCost, fallbackModel);
     if (!telemetry) {
       showUnavailable(ctx, lastOutcome === 'interrupted');
       return;
@@ -1061,7 +1086,13 @@ export default function tpsExtension(pi: ExtensionAPI) {
         ctx.ui.notify('用法：/tps 查看详情；/tps compact|full 切换页脚。', 'warning');
         return;
       }
-      if (mode) footerFull = mode === 'full';
+      if (mode) {
+        footerFull = mode === 'full';
+        ctx.ui.notify(
+          `TPS 页脚已切换为 ${footerFull ? 'full (完整诊断)' : 'compact (极简)'}`,
+          'info'
+        );
+      }
       if (currentTiming) updateLiveFooter(ctx);
       else if (lastTelemetry) showTelemetry(ctx, lastTelemetry);
       else if (lastLegacyStatus) showLegacyStatus(ctx, lastLegacyStatus);
@@ -1156,7 +1187,8 @@ export default function tpsExtension(pi: ExtensionAPI) {
 
       const sessionId = ctx.sessionManager.getSessionId?.() ?? 'unknown';
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const scopeParts = [full ? 'full' : 'branch', filterType].filter(Boolean);
+      const safeFilter = filterType ? filterType.replace(/[^a-zA-Z0-9_.-]/g, '_') : null;
+      const scopeParts = [full ? 'full' : 'branch', safeFilter].filter(Boolean);
       const scope = scopeParts.join('-');
       const filename = `pi-telemetry-${scope}-${sessionId.slice(0, 8)}-${timestamp}.jsonl`;
       const filepath = join(dir, filename);
@@ -1170,12 +1202,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
       if (customCount > 0) parts.push(`${customCount} telemetry`);
       if (structuralCount > 0) parts.push(`${structuralCount} structural`);
       const summary = parts.length > 0 ? parts.join(' + ') : `${exportedEntries.length} entries`;
-      try {
-        const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-        execSync(`${opener} ${JSON.stringify(dir)}`, { stdio: 'ignore' });
-      } catch {
-        // opener not available — ignore silently
-      }
+      openDirectory(dir);
 
       ctx.ui.notify(`Exported ${summary} → ${filepath}`, 'info');
     },
@@ -1217,12 +1244,7 @@ export default function tpsExtension(pi: ExtensionAPI) {
       const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
       writeFileSync(filepath, content);
 
-      try {
-        const opener = process.platform === 'darwin' ? 'open' : 'xdg-open';
-        execSync(`${opener} ${JSON.stringify(dir)}`, { stdio: 'ignore' });
-      } catch {
-        // opener not available — ignore silently
-      }
+      openDirectory(dir);
 
       ctx.ui.notify(`Exported ${entries.length} entries → ${filepath}`, 'info');
     },

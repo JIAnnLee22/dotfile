@@ -104,6 +104,17 @@
           }
         },
         {
+          "id": "agnes-video-2.5-grsai",
+          "name": "Agnes Video 2.5 (GRS)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
           "id": "cd-opus-4.6",
           "name": "Claude Opus 4.6",
           "reasoning": true,
@@ -169,6 +180,32 @@
           }
         },
         {
+          "id": "claude-haiku-4-5-20251001-openai-compact",
+          "name": "Claude Haiku 4.5 (Compact)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "claude-haiku-5-5-quanter",
+          "name": "Claude Haiku 5.5 Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "claude-opus-4-6",
           "name": "Claude Opus 4.6",
           "reasoning": true,
@@ -221,6 +258,19 @@
           }
         },
         {
+          "id": "claude-opus-5-5-quanter",
+          "name": "Claude Opus 5.5 Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "claude-sonnet-4-6-q",
           "name": "Claude Sonnet 4.6",
           "reasoning": true,
@@ -234,8 +284,34 @@
           }
         },
         {
-          "id": "deepseek-v3-2-251201",
-          "name": "DeepSeek V3.2",
+          "id": "claude-sonnet-5-5-quanter",
+          "name": "Claude Sonnet 5.5 Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "codex-auto-review",
+          "name": "Codex Auto Review",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek-flash-tx",
+          "name": "DeepSeek Flash (TX)",
           "reasoning": true,
           "input": [
             "text"
@@ -260,6 +336,33 @@
           }
         },
         {
+          "id": "deepseek-v4-flash-ga-260731",
+          "name": "DeepSeek V4 Flash GA",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "deepseek-v4-flash-vision-exp",
+          "name": "DeepSeek V4 Flash Vision Exp",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "deepseek-v4-pro",
           "name": "DeepSeek V4 Pro",
           "reasoning": true,
@@ -273,33 +376,7 @@
           }
         },
         {
-          "id": "doubao-seed-2-0-code-preview-260215",
-          "name": "Doubao Seed 2.0 Code",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "contextWindow": 1000000,
-          "maxTokens": 64000,
-          "thinkingLevelMap": {
-            "max": "max"
-          }
-        },
-        {
-          "id": "doubao-seed-2-0-lite-260215",
-          "name": "Doubao Seed 2.0 Lite",
-          "reasoning": true,
-          "input": [
-            "text"
-          ],
-          "contextWindow": 1000000,
-          "maxTokens": 64000,
-          "thinkingLevelMap": {
-            "max": "max"
-          }
-        },
-        {
-          "id": "doubao-seed-2-0-mini-260215",
+          "id": "doubao-seed-2-0-mini-260428",
           "name": "Doubao Seed 2.0 Mini",
           "reasoning": true,
           "input": [
@@ -312,8 +389,8 @@
           }
         },
         {
-          "id": "doubao-seed-2-0-pro-260215",
-          "name": "Doubao Seed 2.0 Pro",
+          "id": "doubao-seed-2-1-lite-260915",
+          "name": "Doubao Seed 2.1 Lite",
           "reasoning": true,
           "input": [
             "text"
@@ -323,6 +400,96 @@
           "thinkingLevelMap": {
             "max": "max"
           }
+        },
+        {
+          "id": "doubao-seed-evolving",
+          "name": "Doubao Seed Evolving",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "doubao-seedance-2-5-260628",
+          "name": "Doubao Seedance 2.5 (260628)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.0",
+          "name": "Doubao Seedance 2.0",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.0-fast",
+          "name": "Doubao Seedance 2.0 Fast",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.0-fast-i2v",
+          "name": "Doubao Seedance 2.0 Fast I2V",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.0-i2v",
+          "name": "Doubao Seedance 2.0 I2V",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.5",
+          "name": "Doubao Seedance 2.5",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "doubao-seedance-2.5-i2v",
+          "name": "Doubao Seedance 2.5 I2V",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
         },
         {
           "id": "gemini-3.1-flash-lite-preview",
@@ -403,8 +570,21 @@
           }
         },
         {
-          "id": "glm-4-7-251222",
-          "name": "GLM-4.7",
+          "id": "gemini-4-argon-q",
+          "name": "Gemini 4 Argon Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "glm-5-2-260617",
+          "name": "GLM-5.2",
           "reasoning": true,
           "input": [
             "text"
@@ -444,6 +624,32 @@
         {
           "id": "glm-5.2-tx",
           "name": "GLM-5.2 (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "glm-5.3-flash-tx",
+          "name": "GLM-5.3 Flash (TX)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "glm-5.3-tx",
+          "name": "GLM-5.3 (TX)",
           "reasoning": true,
           "input": [
             "text"
@@ -585,6 +791,32 @@
           }
         },
         {
+          "id": "gpt-6-astra-quanter",
+          "name": "GPT-6 Astra Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "gpt-6.1-sol-quanter",
+          "name": "GPT-6.1 Sol Q",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "gpt-image-2",
           "name": "GPT Image 2",
           "reasoning": false,
@@ -640,8 +872,76 @@
           "maxTokens": 64000
         },
         {
+          "id": "gpt-image-2.5-flare-grsai",
+          "name": "GPT Image 2.5 Flare (GRS)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2.5-flare-q",
+          "name": "GPT Image 2.5 Flare (Q)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2.5-grsai",
+          "name": "GPT Image 2.5 (GRS)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2.5-sunburst-grsai",
+          "name": "GPT Image 2.5 Sunburst (GRS)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "gpt-image-2.5-sunburst-q",
+          "name": "GPT Image 2.5 Sunburst (Q)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
           "id": "hy3",
           "name": "Hy3 (Tencent Hunyuan)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "hy4-preview",
+          "name": "Hy4 Preview (Tencent Hunyuan)",
           "reasoning": true,
           "input": [
             "text"
@@ -690,8 +990,65 @@
           }
         },
         {
+          "id": "kling-v3-motion-control",
+          "name": "Kling V3 Motion Control",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "kling-v3-omni-bd",
+          "name": "Kling V3 Omni (BD)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "kling-v3-turbo-bd",
+          "name": "Kling V3 Turbo (BD)",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "minimax-h3-grsai",
+          "name": "MiniMax H3 (GRS)",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "nano-banana",
           "name": "Nano Banana",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "nano-banana-2.1",
+          "name": "Nano Banana 2.1",
           "reasoning": false,
           "input": [
             "text",
@@ -771,6 +1128,20 @@
           }
         },
         {
+          "id": "qwen3-vl-plus",
+          "name": "Qwen3 VL Plus",
+          "reasoning": true,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
           "id": "qwen3.5-plus",
           "name": "Qwen3.5 Plus",
           "reasoning": true,
@@ -810,6 +1181,122 @@
           }
         },
         {
+          "id": "qwen3.7-plus",
+          "name": "Qwen3.7 Plus",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "qwen3.7-text-embedding",
+          "name": "Qwen3.7 Text Embedding",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "qwen3.8-flash",
+          "name": "Qwen3.8 Flash",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "qwen3.8-max",
+          "name": "Qwen3.8 Max",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "seed-audio-1.0",
+          "name": "Seed Audio 1.0",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "tencent-hailuo-h3",
+          "name": "Tencent Hailuo H3",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "max"
+          }
+        },
+        {
+          "id": "tencent-wand-vega-video-1.0-pro",
+          "name": "Tencent Wand Vega Video 1.0 Pro",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "tencent-wand-vega-video-1.0-pro-fast",
+          "name": "Tencent Wand Vega Video 1.0 Pro Fast",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "tencent-wand-vega-video-1.0-pro-mini",
+          "name": "Tencent Wand Vega Video 1.0 Pro Mini",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "tencent-wand-vega-video-1.5-pro",
+          "name": "Tencent Wand Vega Video 1.5 Pro",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
           "id": "text-embedding-v1",
           "name": "Text Embedding v1",
           "reasoning": false,
@@ -822,6 +1309,76 @@
         {
           "id": "text-embedding-v4",
           "name": "Text Embedding v4",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-asr-subtitles",
+          "name": "Volcengine ASR Subtitles",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-audio-concat",
+          "name": "Volcengine Audio Concat",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-audio-extract",
+          "name": "Volcengine Audio Extract",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-audio-mix",
+          "name": "Volcengine Audio Mix",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-audio-trim",
+          "name": "Volcengine Audio Trim",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-audio-video-mux",
+          "name": "Volcengine Audio Video Mux",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-generate-highlights-minigame",
+          "name": "Volcengine Highlights Minigame",
           "reasoning": false,
           "input": [
             "text"
@@ -845,6 +1402,168 @@
           "reasoning": false,
           "input": [
             "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-scene-segment",
+          "name": "Volcengine Scene Segment",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-concat",
+          "name": "Volcengine Video Concat",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-crop",
+          "name": "Volcengine Video Crop",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-enhance",
+          "name": "Volcengine Video Enhance",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-greenscreen-matte",
+          "name": "Volcengine Greenscreen Matte",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-highlights",
+          "name": "Volcengine Video Highlights",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-speed",
+          "name": "Volcengine Video Speed",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-subtitle",
+          "name": "Volcengine Video Subtitle",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-subtitle-erase-pro",
+          "name": "Volcengine Subtitle Erase Pro",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-transcode",
+          "name": "Volcengine Video Transcode",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-trim",
+          "name": "Volcengine Video Trim",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-understand-router",
+          "name": "Volcengine Video Understand Router",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-mediakit-video-volume-adjust",
+          "name": "Volcengine Video Volume Adjust",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "volcengine-video-concat",
+          "name": "Volcengine Video Concat",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "wan3.0-video",
+          "name": "Wan3.0 Video",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000
+        },
+        {
+          "id": "wan3.0-video-prime",
+          "name": "Wan3.0 Video Prime",
+          "reasoning": false,
+          "input": [
+            "text",
+            "image"
           ],
           "contextWindow": 1000000,
           "maxTokens": 64000
