@@ -3,6 +3,7 @@ import { GenericUsageOverlay, MultiUsageOverlay, type UsageProvider } from "./fr
 import { opencodeGoProvider } from "./providers/opencode-go.ts";
 import { chatgptProvider } from "./providers/chatgpt.ts";
 import { antigravityProvider } from "./providers/antigravity.ts";
+import { vimediaProvider } from "./providers/vimedia.ts";
 
 async function ensureConfigured(ctx: ExtensionCommandContext, provider: UsageProvider, loginHint: string): Promise<boolean> {
 	if (provider.isConfigured) {
@@ -67,11 +68,23 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// 单独展示 Vimedia (New-API / EDC aiTak)
+	pi.registerCommand("usage-vimedia", {
+		description: "显示 Vimedia AI 额度与用量 (New-API / EDC)",
+		handler: async (_args, ctx) => {
+			if (!(await ensureConfigured(ctx, vimediaProvider, "/login vimedia"))) return;
+			await ctx.ui.custom<void>(
+				(tui, theme, _kb, done) => new GenericUsageOverlay(tui, theme, ctx, done, vimediaProvider),
+				{ overlay: true, overlayOptions: { anchor: "top-right", width: 56, maxHeight: 20 } },
+			);
+		},
+	});
+
 	// 合并面板：仅展示已登录的 Provider
 	pi.registerCommand("usage", {
 		description: "显示用量总览 (仅展示已登录服务)",
 		handler: async (_args, ctx) => {
-			const allProviders = [opencodeGoProvider, chatgptProvider, antigravityProvider];
+			const allProviders = [opencodeGoProvider, chatgptProvider, antigravityProvider, vimediaProvider];
 			const activeProviders: UsageProvider[] = [];
 
 			for (const p of allProviders) {
@@ -103,3 +116,4 @@ export * from "./framework.ts";
 export { opencodeGoProvider } from "./providers/opencode-go.ts";
 export { chatgptProvider } from "./providers/chatgpt.ts";
 export { antigravityProvider } from "./providers/antigravity.ts";
+export { vimediaProvider } from "./providers/vimedia.ts";

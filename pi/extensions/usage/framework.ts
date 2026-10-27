@@ -19,10 +19,11 @@ export function formatTime(time: string | number): string {
 	}).format(d);
 }
 
-export function formatPercent(remaining: number, reset: string | number): string {
+export function formatPercent(remaining: number, reset?: string | number): string {
 	const clamped = Math.max(0, Math.min(100, remaining));
 	const filled = Math.round((clamped / 100) * 20);
-	return `${"█".repeat(filled)}${"░".repeat(20 - filled)} ${clamped.toFixed(0)}% ${formatTime(reset)}更新`;
+	const resetStr = reset ? ` ${formatTime(reset)}更新` : "";
+	return `${"█".repeat(filled)}${"░".repeat(20 - filled)} ${clamped.toFixed(0)}%${resetStr}`;
 }
 
 // ── 基础 Overlay ──
@@ -70,7 +71,7 @@ export interface UsageSnapshot {
 	label: string;
 	/** 剩余可用百分比 0-100 */
 	percent: number;
-	resetsAt: string | number;
+	resetsAt?: string | number;
 }
 
 export interface UsageReport {

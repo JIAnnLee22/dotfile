@@ -8,6 +8,7 @@ export type { UsageWindow, UsageReport, UsageProvider } from "./usage/framework.
 export { fetchGoUsage, getOpencodeGoApiKey, opencodeGoProvider } from "./usage/providers/opencode-go.ts";
 export { chatgptProvider } from "./usage/providers/chatgpt.ts";
 export { antigravityProvider } from "./usage/providers/antigravity.ts";
+export { vimediaProvider } from "./usage/providers/vimedia.ts";
 
 // 为了让 `pi -e ./extensions/usage-overlay.ts` 仍能工作，提供空的 extension 工厂
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -15,5 +16,7 @@ export default function (_pi: ExtensionAPI) {
 	// 不再在此注册命令，统一由 extensions/usage/index.ts 注册：
 	//  - usage-opencode-go
 	//  - usage-chatgpt / usage-codex
+	//  - usage-antigravity
+	//  - usage-vimedia
 	//  - usage (合并面板)
 }

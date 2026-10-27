@@ -11,7 +11,7 @@
 - **计划**：社区包 `@bacnh85/pi-plan@0.16.7`，其 peer 范围覆盖当前 Pi 1.1.0；升级 Pi 时重新核对兼容范围。`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve current|new` 经人工确认后实施。`pi-plan.autoFlow` 明确设为 `false`；不使用 `/plan-auto`、`/goal` 或自动 review/fix flow。计划文件默认写入项目 `.agents/plans/`。
 - **并行子任务**：社区包 `@parke.dev/pi-subagent` 的 `subagent` 工具。独立的只读工作用 `explore` profile；编码用 `general` + `isolation: "worktree"`，先查看 diff，再决定 apply/discard。worktree 不是操作系统沙箱。
 - **输入翻译**：本地 `extensions/input-translate/index.ts`，默认将用户输入英译后交给当前主模型、主模型默认中文回复；按目录单价选最便宜的可用 `openai-codex` 模型，不推理、不请求 priority，5 秒超时原文放行。`/translate on|off|status` 控制本次运行，重载默认开启；命令、扩展消息、即时纠偏和超长文本直接放行，详见同目录 README。
-- **本地用量面板**：`extensions/usage/index.ts`，保留 `/usage`、`/usage-opencode-go`、`/usage-chatgpt`、`/usage-codex`、`/usage-antigravity`；`extensions/usage-overlay.ts` 是兼容入口。
+- **本地用量面板**：`extensions/usage/index.ts`，保留 `/usage`、`/usage-opencode-go`、`/usage-chatgpt`、`/usage-codex`、`/usage-antigravity`、`/usage-vimedia`；`extensions/usage-overlay.ts` 是兼容入口。
 - **网页与大输出**：`pi-web-access` 提供 `web_search`、`source_check`、`fetch_content`、`get_search_content`；`web-search.json` 使用 eager 加载以保持这些工具可见。大输出先在 `bash` 内汇总，只返回必要结果；需要脚本编排工具时可按需用 `pi --tools +codemode` 启用内置能力。当前不启用自主循环或持久知识库，不要主动安装相关插件；已有历史数据保留。
 
 旧 `plan-mode`、`autopilot`、`parallel-tasks` 和自定义标题扩展已移除；旧的 `PLAN_MODE_REQUIREMENTS_A.md`/`B.md` 是历史设计文档，不能当作当前插件的能力说明。需要恢复旧实现时从迁移前提交 `268c493` 查阅，不要再调用 `plan_submit`、`autopilot_submit`、`parallel_tasks` 等旧工具。
