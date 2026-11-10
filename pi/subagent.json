@@ -1,16 +1,16 @@
 {
   "taskDefaults": {
     "explore": {
-      "model": "antigravity/gemini-3.8-flash",
-      "thinking": "high"
+      "model": "vimedia/deepseek-flash-tx",
+      "thinking": "max"
     },
     "review": {
-      "model": "antigravity/gemini-3.8-flash",
-      "thinking": "high"
+      "model": "vimedia/deepseek-flash-tx",
+      "thinking": "max"
     },
     "general": {
-      "model": "antigravity/gemini-3.8-flash",
-      "thinking": "high"
+      "model": "vimedia/deepseek-flash-tx",
+      "thinking": "max"
     }
   }
 }

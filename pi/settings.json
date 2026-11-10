@@ -1,8 +1,8 @@
 {
   "collapseChangelog": true,
-  "defaultModel": "gemini-3.8-flash",
+  "defaultModel": "gpt-6.1-sol",
   "defaultProjectTrust": "ask",
-  "defaultProvider": "antigravity",
+  "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "xhigh",
   "doubleEscapeAction": "tree",
   "editorPaddingX": 0,
@@ -17,7 +17,13 @@
     "npm:@gamaraan/todos-tool@0.2.4",
     "npm:@bacnh85/pi-plan@0.16.7",
     "npm:@parke.dev/pi-subagent@0.8.0",
-    "npm:pi-antigravity@0.8.0"
+    {
+      "source": "npm:pi-antigravity@0.11.0",
+      "extensions": [
+        "src/index.ts",
+        "src/features/generate-image.ts"
+      ]
+    }
   ],
   "pi-plan": {
     "autoFlow": false
@@ -34,5 +40,6 @@
   "fullscreenCopyOnSelect": true,
   "treeFilterMode": "default",
   "enableInstallTelemetry": true,
-  "showCacheMissNotices": true
+  "showCacheMissNotices": true,
+  "deviceId": "b9aa5a78-4928-41d9-9edf-4dae3c763014"
 }

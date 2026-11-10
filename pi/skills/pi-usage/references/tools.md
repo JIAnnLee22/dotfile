@@ -8,7 +8,7 @@
 | `@ff-labs/pi-fff` | `fffind`、`ffgrep`，模糊路径/内容搜索 | Git-aware + frecency 排序，优先用它定位 |
 | `pi-web-access` | `web_search`、`source_check`、`fetch_content`、`get_search_content` | `web-search.json` 固定 `toolActivation: eager`；多 provider、网页/PDF/视频抓取与来源索引；`source_check` 不是真相判定器 |
 | `@gamaraan/todos-tool` | `todo`、`/todo` | 分阶段任务追踪，按原任务项及时完成 |
-| `pi-antigravity` | Google Antigravity 提供者与图片生成工具 | 认证与模型选择遵循包文档 |
+| `pi-antigravity` | Google Antigravity 提供者与图片生成工具 | 固定 0.11.0；仅加载 provider 与生图工具资源，不加载 `google_search` 工具；`/antigravity.refresh` 同步实时模型目录，已退役模型随成功刷新移除 |
 | `@bacnh85/pi-plan` | `/plan`、`/plan-approve current\|new`、`write_plan`、`ask_user_question` | 固定 0.16.7，兼容 Pi 1.1.0；`autoFlow: false`，只使用人工批准流程 |
 | `@parke.dev/pi-subagent` | `subagent` 工具、`/subagents`、`/subagent-cost` | 并行只读 profile `explore`；写任务显式 worktree，审查 diff 后 apply |
 | 本地 `extensions/usage/` | `/usage` 及各 provider 子命令 | 保留自研用量面板；`usage-overlay.ts` 仅作历史兼容入口 |
