@@ -1,6 +1,6 @@
 {
   "collapseChangelog": true,
-  "defaultModel": "gpt-6.1-sol",
+  "defaultModel": "gpt-6.2-sol",
   "defaultProjectTrust": "ask",
   "defaultProvider": "openai-codex",
   "defaultThinkingLevel": "xhigh",
@@ -9,7 +9,7 @@
   "extensions": [],
   "fullscreenScrollbar": "hidden",
   "hideThinkingBlock": true,
-  "lastChangelogVersion": "1.1.0",
+  "lastChangelogVersion": "1.5.2",
   "outputPad": 0,
   "packages": [
     "npm:@ff-labs/pi-fff@0.10.3",
@@ -18,7 +18,7 @@
     "npm:@bacnh85/pi-plan@0.16.7",
     "npm:@parke.dev/pi-subagent@0.8.0",
     {
-      "source": "npm:pi-antigravity@0.11.0",
+      "source": "npm:pi-antigravity@0.15.0",
       "extensions": [
         "src/index.ts",
         "src/features/generate-image.ts"
@@ -41,5 +41,10 @@
   "treeFilterMode": "default",
   "enableInstallTelemetry": true,
   "showCacheMissNotices": true,
-  "deviceId": "b9aa5a78-4928-41d9-9edf-4dae3c763014"
+  "deviceId": "b9aa5a78-4928-41d9-9edf-4dae3c763014",
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:pi-web-access@0.33.0\",\"scope\":\"user\"}": "0.33.0",
+    "{\"source\":\"npm:@bacnh85/pi-plan@0.16.7\",\"scope\":\"user\"}": "0.16.7",
+    "{\"source\":\"npm:@parke.dev/pi-subagent@0.8.0\",\"scope\":\"user\"}": "0.8.0"
+  }
 }

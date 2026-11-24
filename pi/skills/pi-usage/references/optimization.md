@@ -33,7 +33,7 @@
 
 **Skills 与扩展**
 - 新能力优先做成 skill（`~/.pi/agent/skills/<name>/SKILL.md`，frontmatter 需 name+description；description 决定何时自动加载，要写具体）。
-- 计划与并行任务使用社区扩展；不启用自主循环。计划包固定 `@bacnh85/pi-plan@0.16.7`，peer 范围覆盖 Pi 1.1.0；升级宿主后重新核对。
+- 计划与并行任务使用社区扩展；不启用自主循环。计划包固定 `@bacnh85/pi-plan@0.16.7`；Pi 1.5.2 超出其声明的 peer 范围 `<1.2.0`，用户确认保留，启动与命令加载检查通过，完整审批流程尚未验证；后续升级重新核对。
 - 本地保留 `extensions/usage/`、`extensions/tps/`、`extensions/gpt-fast.ts` 及兼容入口。切换包前核对 Pi 版本、peer 依赖、权限边界与持久化格式。
 - `/skill:名称` 可强制加载 skill；`enableSkillCommands` 控制此命令注册（默认 true）。
 

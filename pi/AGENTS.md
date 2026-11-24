@@ -8,7 +8,7 @@
 
 ## 当前扩展工作流
 
-- **计划**：社区包 `@bacnh85/pi-plan@0.16.7`，其 peer 范围覆盖当前 Pi 1.1.0；升级 Pi 时重新核对兼容范围。`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve current|new` 经人工确认后实施。`pi-plan.autoFlow` 明确设为 `false`；不使用 `/plan-auto`、`/goal` 或自动 review/fix flow。计划文件默认写入项目 `.agents/plans/`。
+- **计划**：社区包 `@bacnh85/pi-plan@0.16.7`，Nix 固定的 Pi 1.5.2 已超出其声明的 peer 范围 `<1.2.0`；用户确认保留，启动与命令加载检查通过，但完整审批流程尚未验证，后续升级需重新核对兼容性。`/plan` 只读调研，`write_plan` 生成 Markdown，`/plan-approve current|new` 经人工确认后实施。`pi-plan.autoFlow` 明确设为 `false`；不使用 `/plan-auto`、`/goal` 或自动 review/fix flow。计划文件默认写入项目 `.agents/plans/`。
 - **并行子任务**：社区包 `@parke.dev/pi-subagent` 的 `subagent` 工具。独立的只读工作用 `explore` profile；编码用 `general` + `isolation: "worktree"`，先查看 diff，再决定 apply/discard。worktree 不是操作系统沙箱。
 - **输入翻译**：本地 `extensions/input-translate/index.ts`，默认将用户输入英译后交给当前主模型、主模型默认中文回复；按目录单价选最便宜的可用 `openai-codex` 模型，不推理、不请求 priority，5 秒超时原文放行。`/translate on|off|status` 控制本次运行，重载默认开启；命令、扩展消息、即时纠偏和超长文本直接放行，详见同目录 README。
 - **本地用量面板**：`extensions/usage/index.ts`，保留 `/usage`、`/usage-opencode-go`、`/usage-chatgpt`、`/usage-codex`、`/usage-antigravity`、`/usage-vimedia`；`extensions/usage-overlay.ts` 是兼容入口。
