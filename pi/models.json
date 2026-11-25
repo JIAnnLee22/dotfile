@@ -43,6 +43,29 @@
         }
       }
     },
+    "gptshare": {
+      "name": "gptshare",
+      "baseUrl": "https://s.442811042.xyz/v1",
+      "api": "openai-completions",
+      "compat": {
+        "supportsDeveloperRole": false
+      },
+      "models": [
+        {
+          "id": "gpt-6.2-sol",
+          "name": "gpt-6.2-sol",
+          "reasoning": true,
+          "input": [
+            "text"
+          ],
+          "contextWindow": 1000000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": {
+            "max": "xhigh"
+          }
+        }
+			]
+		},
     "vimedia": {
       "name": "vimedia",
       "baseUrl": "https://dn-api-ai.vigame.cn/v1",
