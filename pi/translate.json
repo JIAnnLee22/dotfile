@@ -1,0 +1,10 @@
+{
+  "model": {
+    "provider": "vimedia",
+    "id": "deepseek-flash-tx"
+  },
+  "enabled": false,
+  "timeoutMs": 5000,
+  "maxInputChars": 16000,
+  "cacheSize": 64
+}
