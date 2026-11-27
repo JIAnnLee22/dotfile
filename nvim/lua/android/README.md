@@ -2,10 +2,10 @@
 
 为纯 Neovim（无 Android Studio）提供两类跳转，补足 `jdtls` / JetBrains 官方 `kotlin-lsp` 不覆盖的能力：
 
-1. **SDK 源码跳转**：在 Kotlin/Java 中对 `android.*` / `androidx.*` / `java.*` 类名按 `gd` 直接跳到 `$SDK/sources/android-XX/.../*.java`。
+1. **SDK 源码跳转**：在 Kotlin/Java 中对平台类（如 `android.view.View`）按 `gd`，打开 `$SDK/sources/android-XX/.../*.java`。AndroidX 是 Gradle 依赖，不在平台 SDK 中。
 2. **XML ↔ 代码资源跳转**：`@string/@color/@drawable/@layout/@id/@mipmap/@xml/@style` 与 `R.layout.xxx / R.string.xxx` 互跳，`AndroidManifest.xml` 的 `@string/@mipmap/@style`、`tools:context=".MainActivity"`、自定义 `<com.example.View>`、`<TextView>` 等 widget 标签跳 SDK/项目源码。
 
-零外部依赖（除 `rg` 可选提速），自动从 `local.properties` / `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` / `~/Android/Sdk` 解析 SDK，从 `app/build.gradle.kts` 的 `compileSdk { version = release(36) { minorApiLevel = 1 } }` 解析 `compileSdk` 并选最匹配的 `sources/android-36.1`。
+SDK 与 XML 资源导航不依赖语言服务器；依赖 JAR 的源码解包使用 `unzip`。自动从 `local.properties` / `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` / `~/Android/Sdk` 解析 SDK，从 `app/build.gradle.kts` 的 `compileSdk { version = release(36) { minorApiLevel = 1 } }` 解析 `compileSdk` 并选最匹配的 `sources/android-36.1`。
 
 ## 安装
 
@@ -20,22 +20,23 @@ require("android").setup()
 ```lua
 require("android").setup({
   keymaps = true,
-  override_gd = true,   -- gd = 智能跳转, gD = 原生 LSP definition
+  override_gd = true,   -- gd = 智能跳转，gD = 直接请求 LSP 定义
   jump_key = "gd",
   sdk_key = "<leader>as",
   res_key = "<leader>ar",
 })
 -- 全局覆盖 SDK 目录（否则自动探测）:
 -- vim.g.android_sdk_dir = "/opt/android-sdk"
+-- vim.g.android_compile_sdk = "36.1" -- Gradle 构建脚本间接设置 compileSdk 时可覆盖
 ```
 
 ## 按键与命令
 
 | 按键/命令 | 作用 |
 |-----------|------|
-| `gd` (在 kotlin/java/xml) | 智能跳转：优先资源/`@`/`R.`，其次 XML tag/自定义 View，再 SDK 源码，最后回落 `vim.lsp.buf.definition()` |
-| `gf` | 同上，但走 `gf` 语义 |
-| `gD` / `<leader>gd` | 原生 LSP definition |
+| `gd` | 优先 Android 资源/XML 标签；Java/Kotlin 优先请求 LSP，找不到定义时按显式 import 或全限定名打开 SDK 源码 |
+| `gf` | 资源/XML 标签/显式 SDK 类，其他按 Neovim 原来的文件路径打开 |
+| `gD` / `<leader>gd` | 直接请求 LSP，并解析 SDK 和依赖的源码位置 |
 | `<leader>as` | 光标词跳 SDK 源码 |
 | `<leader>ar` | 光标处资源跳文件 |
 | `:AndroidGoto` | 同 `gd` 智能 |
@@ -49,8 +50,8 @@ require("android").setup({
   - `R.layout.foo` / `R.string.foo` / `R.drawable.foo` / `R.id.foo` → `res/layout*/foo.xml` / `values/*.xml` / `drawable*/foo.*` / 含 `@+id/foo` 的 layout
   - `@layout/foo` 字符串（少见）亦可
   - `binding.fooBar` → `snake_case` 找 `id/foo_bar` 的 layout/ids.xml
-  - 大写开头的 `View`, `Activity`, `TextView` 等 → 通过 `import` 推断 FQN → `COMMON_PREFIXES` 启发 → `rg` 全量搜索兜底 → `sources` 文件
-  - `<cWORD>` 含 `.` 的 FQN 直接映射 `a.b.C -> a/b/C.java`
+  - `gd` 可按显式 import（含 Kotlin `as` 别名）、全限定名或 LSP 返回的 `android.jar` 位置打开真实 SDK 源码，不按简单类名抢占项目定义。
+  - `<leader>as` / `:AndroidSdk` 还可主动按简名查找 SDK 类。
 - **XML**：
   - `@string/app_name` → `values/strings.xml` 并光标定到 `name="app_name"`
   - `@color/black` → `values/colors.xml`
@@ -64,17 +65,15 @@ require("android").setup({
 
 ## SDK 解析细节
 
-1. `get_sdk_dir` 优先级：`vim.g.android_sdk_dir` > `local.properties:sdk.dir` > `$ANDROID_HOME`/`$ANDROID_SDK_ROOT`/`$ANDROID_SDK_HOME` > `~/Android/Sdk` > `~/Android/sdk` > `~/Library/Android/sdk`。项目的 `local.properties` 优先于全局环境变量。
-2. `get_compile_sdk` 正则同时捕获 `minorApiLevel`，`36 + 1 → "36.1"`。
-3. `get_sources_root` 只认含 `android/` 子目录的有效 `sources/android-*`，`android-36` 这种空壳（仅 `.installer`）会被跳过，自动选 `android-36.1`。
-4. `sdk.find_sdk_source` 先 `import` 表 → `COMMON_PREFIXES` 探测 → `XML_TAG_MAP` → `rg "class Foo"`。
-5. Kotlin LSP 的 definition 若返回 Gradle `jar:file:...!/path`，`android.dependency` 会在 `~/.cache/nvim/android-lsp-sources/` 解包同版本的 `*-sources.jar` 并打开源码；只有二进制 JAR 时会提示下载源码包，不进行反编译。Java jdtls 的 `jdt://` 虚拟 URI 不由该模块伪造为普通文件。
+1. SDK 目录优先级：`vim.g.android_sdk_dir` > `local.properties:sdk.dir` > `$ANDROID_HOME` / `$ANDROID_SDK_ROOT` > `~/Android/Sdk` 等常见位置。
+2. 优先读取当前 Gradle 模块的 `compileSdk`，支持 `release(36)` 加 `minorApiLevel = 1`。先匹配准确的源码版本，再匹配同主 API（比如 `37` → `37.0`）；知道 API 时不会跳到其他主版本。
+3. Gradle JAR（包括 AndroidX 的 `transformed/.../jars/classes.jar`）会尝试打开缓存中的同版本 `*-sources.jar`。Compose 等采用不带版本号的 `*-release.aar` 时，先比对原始 AAR 中的 `classes.jar` 确认版本。Kotlin 标准库还会查找 `commonMain`、`jvmMain` 等目录中的声明。jdtls 的 `jdt://` 先尝试 SDK 源码，再请求 `java/classFileContents`。从字节码位置回查源码时，重载可能定位到同文件中的第一个声明。
 
 ## 依赖
 
 - Neovim 0.11+（`vim.lsp.enable` / `vim.fs.find`）
 - `rg` 强烈建议（无则部分回落到 `readfile` 仍可工作）
-- 已安装 SDK `sources`（`sdkmanager --install "sources;android-36"`）
+- 可写 SDK 用 `sdkmanager --install "sources;android-36"`（把 `36` 替换为项目 API）。本仓库的 NixOS SDK 是只读的，通过 `modules/programs/gui.nix` 的 `androidenv` 安装 `sources`。
 - Gradle 依赖源码跳转需要对应的 `*-sources.jar`；没有源码包时不会伪造或反编译代码
 - `unzip`（当前 NixOS CLI 配置已提供）
 
@@ -90,7 +89,7 @@ require("android").setup({
 
 先确认 Kotlin buffer 已由 `kotlin_lsp` attach；若 LSP 未 attach，补全、悬浮和项目代码跳转不能由 Android 导航模块替代。`AndroidInfo` 应显示有效的 project root、SDK 和 sources 目录。
 
-`init.lua` 中 `require("android").setup()` 已在 `require("lsp")` 之后，保证 `LspAttach` 之后覆盖 `gd`。
+`init.lua` 中 `require("android").setup()` 注册 Java/Kotlin/XML 的 `gd`；通用 LSP 映射不会覆盖它。
 
 ## 局限 / TODO
 

@@ -59,11 +59,11 @@ local function inject_caps(name)
   end
 end
 
-for _, srv in ipairs({ 'lua_ls', 'tsgo', 'clangd', 'jdtls', 'kotlin_lsp' }) do
+local servers = { 'lua_ls', 'tsgo', 'clangd', 'rust_analyzer', 'jdtls', 'kotlin_lsp' }
+for _, srv in ipairs(servers) do
   inject_caps(srv)
 end
--- 启用 servers：Kotlin/Android 仅用官方 kotlin_lsp，jdtls 仅对 java 生效
-vim.lsp.enable({ 'lua_ls', 'tsgo', 'clangd', 'jdtls', 'kotlin_lsp' })
+vim.lsp.enable(servers)
 
 vim.diagnostic.config({
   virtual_text = true,
@@ -95,6 +95,11 @@ vim.api.nvim_create_autocmd('LspAttach', {
       vim.keymap.set(mode, lhs, rhs, { buffer = bufnr, silent = true, desc = desc })
     end
     map('n', 'K', vim.lsp.buf.hover, 'LSP hover')
+    -- Some servers register definition support after attach.
+    -- Preserve Android's buffer-local smart jump; use gd for other LSPs.
+    if not vim.tbl_contains({ 'kotlin', 'java', 'xml' }, vim.bo[bufnr].filetype) then
+      map('n', 'gd', vim.lsp.buf.definition, 'LSP definition')
+    end
     map('n', 'gD', goto_definition, 'LSP definition')
     map('n', 'gr', vim.lsp.buf.references, 'LSP references')
     map('n', 'gi', vim.lsp.buf.implementation, 'LSP implementation')
@@ -113,8 +118,8 @@ vim.api.nvim_create_autocmd('LspAttach', {
 
 -- 若用户手动 :packadd blink.cmp 后，需重启或执行此命令重算
 vim.api.nvim_create_user_command('LspCapabilitiesInfo', function()
-  local caps = capabilities and 'blink.cmp' or 'native'
-  vim.notify('LSP capabilities source: ' .. caps .. '\nServers: lua_ls, tsgo, clangd, jdtls(+java21), kotlin_lsp(intellij-server)', vim.log.levels.INFO)
+  local caps = blink_ok and 'blink.cmp' or 'native'
+  vim.notify('LSP capabilities source: ' .. caps .. '\nServers: ' .. table.concat(servers, ', '), vim.log.levels.INFO)
 end, { desc = 'Show LSP completion source' })
 
 vim.api.nvim_create_user_command('JavaLspInfo', function()

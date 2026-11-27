@@ -70,61 +70,30 @@ function M.parse_imports(bufnr)
   local map = {}
   for _, l in ipairs(lines) do
     -- Kotlin/Java: import android.view.View / import androidx.core.view.isVisible
-    local imp = l:match("^%s*import%s+([%w%.%_%$]+)")
+    local imp, suffix = l:match('^%s*import%s+([%w_.$]+)(.*)$')
     if imp then
-      -- skip alias: import foo as bar
-      local simple = imp:match("%.([%w%_]+)$")
-      if simple then
-        -- handle kotlin extension property imports like androidx.core.view.isVisible -> ignore? still map
-        map[simple] = imp
-        -- also map without last component if it's function? keep anyway
-      end
+      local simple = suffix:match('^%s+as%s+([%w_]+)') or imp:match('%.([%w_$]+)$')
+      if simple then map[simple] = imp end
     end
-    -- package line not needed
   end
   return map
 end
 
 function M.word_under_cursor()
-  -- use expand <cword> and <cWORD> for FQN detection
-  local cword = vim.fn.expand("<cword>")
-  local cWORD = vim.fn.expand("<cWORD>")
-  -- cWORD may contain FQN like android.view.View
-  -- prefer cWORD if it contains dots and matches class pattern
-  if cWORD:match("^[%w_]+%.[%w%.%_]+$") and #cWORD < 120 then
-    -- clean trailing punctuation like , ; ) ( < >
-    cWORD = cWORD:gsub("[,;%)%(<>%[%]\"']+$", ""):gsub("^[\"'<%(%)%[]+", "")
-    if cWORD:match("%.") then return cWORD end
+  local col = vim.api.nvim_win_get_cursor(0)[2] + 1
+  for first, word, last in vim.api.nvim_get_current_line():gmatch('()([%w_$][%w_.$]*)()') do
+    if col >= first and col < last then
+      -- Resolve the prefix through the symbol at the cursor, not its suffix.
+      local offset = col - first + 1
+      if word:sub(offset, offset) == '.' then return nil end
+      local dot = word:find('.', offset, true)
+      return dot and word:sub(1, dot - 1) or word
+    end
   end
-  return cword
 end
 
 function M.line_under_cursor()
   return vim.api.nvim_get_current_line()
-end
-
---- try to resolve simple name to FQN via imports + heuristics
-function M.resolve_fqn(word, import_map)
-  if not word or word == "" then return nil end
-  if word:match("%.") then
-    -- already FQN (contains dot), assume it's it
-    return word
-  end
-  if word:match("^[A-Z]") then
-    -- Class name: look up imports
-    if import_map[word] then
-      -- handle case where import is extension property like pkg.isVisible -> not a class
-      -- check if last component equals word, if import ends with .word then it's class
-      local fqn = import_map[word]
-      if fqn:match("%." .. word .. "$") then return fqn end
-      -- if it's like android.view.ViewCompat, simple is ViewCompat not View -> not match, try elsewhere
-    end
-    -- heuristic: try common prefixes by probing filesystem later
-    return word -- will probe with prefixes
-  else
-    -- lowercase word like method/variable -> not a class, return nil
-    return nil
-  end
 end
 
 --- Convert FQN to possible source file paths under sources root
@@ -132,13 +101,14 @@ end
 --- also handle inner classes: android.view.View$OnClickListener -> android/view/View.java
 function M.fqn_to_rel_paths(fqn)
   local paths = {}
-  -- strip inner class suffix
-  local base = fqn:gsub("%$.*$", "")
-  local rel = base:gsub("%.", "/")
-  -- java sources are typically .java, some kotlin files are .kt but framework is java
-  table.insert(paths, rel .. ".java")
-  table.insert(paths, rel .. ".kt")
-  -- handle case where word is simple name without package: View -> we will generate many
+  local base = fqn:gsub('%$.*$', '')
+  while base do
+    local rel = base:gsub('%.', '/')
+    paths[#paths + 1] = rel .. '.java'
+    paths[#paths + 1] = rel .. '.kt'
+    -- Java source for Outer.Inner is usually in Outer.java.
+    base = base:match('^(.*%.[A-Z][%w_]*)%.[A-Z][%w_]*$')
+  end
   return paths
 end
 
@@ -152,12 +122,8 @@ end
 --- search sources for class definition if FQN probing fails: rg "class <Word>"
 --- returns file path if unique, else nil + candidates
 function M.search_class_in_sources(sdk_sources, simple_name)
-  if not sdk_sources or not simple_name or simple_name == "" then return nil end
-  -- use ripgrep if available
-  local cmd = string.format("rg --files-with-matches --glob '*.java' --glob '*.kt' '\\bclass\\s+%s\\b|\\binterface\\s+%s\\b|\\bobject\\s+%s\\b' %s 2>/dev/null | head -n 20",
-    vim.fn.shellescape(simple_name), vim.fn.shellescape(simple_name), vim.fn.shellescape(simple_name), vim.fn.shellescape(sdk_sources))
-  -- shellescape adds quotes, but we need to handle; simpler build without extra escaping inside pattern
-  -- fallback: use vim.fn.system with list
+  if not sdk_sources or not simple_name or not simple_name:match('^[A-Z][%w_]*$')
+    or vim.fn.executable('rg') ~= 1 then return nil end
   local pattern = string.format("\\b(class|interface|object|enum)\\s+%s\\b", simple_name)
   local out = vim.fn.system({ "rg", "--files-with-matches", "--glob", "*.java", "--glob", "*.kt", pattern, sdk_sources })
   if vim.v.shell_error ~= 0 then return nil end
@@ -178,52 +144,35 @@ end
 --- @return string|nil file, string|nil reason, table|nil candidates
 function M.find_sdk_source(word, opts)
   opts = opts or {}
-  local root = util.find_project_root(opts.startpath)
-  local sdk_dir = util.get_sdk_dir({ root = root, startpath = opts.startpath })
-  if not sdk_dir then return nil, "SDK not found (set $ANDROID_HOME or sdk.dir in local.properties)" end
-  local compile_sdk = util.get_compile_sdk(root)
-  local sources = util.get_sources_root(sdk_dir, compile_sdk)
-  if not sources then return nil, "SDK sources not found under " .. sdk_dir .. "/sources (install via SDK Manager)" end
-
-  -- word resolution
-  if not word or word == "" then word = M.word_under_cursor() end
-  if not word or word == "" then return nil, "no word under cursor" end
-
-  -- strip generics and punctuation
-  word = word:gsub("<.*$", ""):gsub("%[.*$", ""):gsub("[,;%)%]]+$", "")
-
-  local import_map = M.parse_imports(opts.bufnr or 0)
-  local fqn = M.resolve_fqn(word, import_map)
-
-  -- if word was FQN already, try direct path
-  if word:match("%.") then
-    local rels = M.fqn_to_rel_paths(word)
-    for _, rel in ipairs(rels) do
-      local f = M.find_file_in_sources(sources, rel)
-      if f then return f end
+  local function resolve_in(sources, fqn)
+    for _, rel in ipairs(M.fqn_to_rel_paths(fqn)) do
+      local path = M.find_file_in_sources(sources, rel)
+      if path then return path end
     end
-    -- try searching class part
-    local simple = word:match("%.([%w_]+)$")
-    if simple then
-      local hit, cands = M.search_class_in_sources(sources, simple)
-      if hit then return hit, nil, cands end
-    end
-    return nil, "SDK source not found for FQN " .. word .. " (sources=" .. sources .. ")"
   end
 
-  -- word is simple class name
-  if fqn and fqn:match("%.") then
-    -- resolved via import
-    local rels = M.fqn_to_rel_paths(fqn)
-    for _, rel in ipairs(rels) do
-      local f = M.find_file_in_sources(sources, rel)
-      if f then return f end
-    end
-    -- An explicit third-party import must not be guessed as an Android
-    -- platform class with the same simple name (for example com.foo.View).
-    if not fqn:match("^(android|java|javax)%.") then
-      return nil, "source is outside platform SDK: " .. fqn
-    end
+  word = word or M.word_under_cursor()
+  if not word or not word:match('^[%a_][%w_.$]*$') then return nil, 'no SDK symbol at cursor' end
+
+  local owner, tail = word:match('^([%w_$]+)(.*)$')
+  local imported = M.parse_imports(opts.bufnr)[owner]
+  local fqn = imported and imported .. tail or (tail ~= '' and word or nil)
+  if opts.strict and not fqn then return nil, 'no explicit SDK class at cursor' end
+
+  local root = util.find_project_root(opts.startpath)
+  local sdk_dir = util.get_sdk_dir({ root = root, startpath = opts.startpath })
+  if not sdk_dir then return nil, 'SDK not found (set $ANDROID_HOME or sdk.dir in local.properties)' end
+  local compile_sdk = util.get_compile_sdk(root, opts.startpath)
+  local sources = util.get_sources_root(sdk_dir, compile_sdk)
+  if not sources then
+    return nil, 'SDK sources not found for API ' .. (compile_sdk or 'unknown') .. ' under ' .. sdk_dir .. '/sources'
+  end
+
+  -- Never guess by simple name when an explicit package/import was supplied.
+  if fqn then
+    local file = resolve_in(sources, fqn)
+    if file then return file end
+    return nil, 'SDK source not found for ' .. fqn
   end
 
   -- try common prefixes heuristic
@@ -252,18 +201,68 @@ function M.find_sdk_source(word, opts)
   return nil, "class " .. word .. " not found in SDK sources (" .. sources .. ")"
 end
 
+-- Resolve bytecode in android.jar to the downloaded platform sources. The
+-- archive may be the real Nix store target while sources live in the SDK symlink tree.
+function M.find_archive_source(archive, entry)
+  local sdk_dir, api
+  if archive then
+    if vim.fs.basename(archive) ~= 'android.jar' then return nil end
+    sdk_dir, api = archive:match('^(.*)/platforms/android%-([%d.]+)/android%.jar$')
+  end
+  local root = util.find_project_root()
+  local project_sdk = util.get_sdk_dir({ root = root })
+  api = api or util.get_compile_sdk(root)
+  local sources = util.get_sources_root(sdk_dir, api) or util.get_sources_root(project_sdk, api)
+  local fqn = entry:gsub('%.class$', ''):gsub('%.java$', ''):gsub('/', '.')
+  for _, rel in ipairs(M.fqn_to_rel_paths(fqn)) do
+    local file = M.find_file_in_sources(sources, rel)
+    if file then return file end
+  end
+end
+
+-- Bytecode positions are not source positions. Without a source range,
+-- use the first matching declaration (overloads may share a source file).
+function M.declaration_line(file_or_lines, symbol)
+  if not symbol or not symbol:match('^[%w_]+$') then return nil end
+  local lines = type(file_or_lines) == 'table' and file_or_lines or vim.fn.readfile(file_or_lines)
+  local name = '%f[%w_]' .. symbol .. '%f[^%w_]'
+  for lnum, line in ipairs(lines) do
+    if not line:match('^%s*[/*]') then
+      if line:match('%f[%w_]class%s+' .. name) or line:match('%f[%w_]interface%s+' .. name)
+        or line:match('%f[%w_]enum%s+' .. name) or line:match('%f[%w_]object%s+' .. name)
+        or line:match('%f[%w_]typealias%s+' .. name) then
+        return lnum
+      end
+      if line:match('%f[%w_]fun%s+[^=]*' .. name .. '%s*%(')
+        or line:match('%f[%w_]va[lr]%s+[^=]*' .. name .. '%s*[:=]') then
+        return lnum
+      end
+      if line:match('^%s*public%s') or line:match('^%s*protected%s') or line:match('^%s*private%s') then
+        local signature = line:match('^[^{=;]*')
+        if signature:match(name .. '%s*%(') or line:match(name .. '%s*=') then return lnum end
+      end
+    end
+  end
+end
+
 function M.goto_sdk(word, opts)
   opts = opts or {}
+  local symbol = word and word:match('[%w_]+$') or vim.fn.expand('<cword>')
+  local function open(path)
+    vim.cmd("normal! m'")
+    vim.cmd.edit(vim.fn.fnameescape(path))
+    vim.api.nvim_win_set_cursor(0, { M.declaration_line(path, symbol) or 1, 0 })
+  end
   local file, err, cands = M.find_sdk_source(word, opts)
   if file then
     if cands and #cands > 1 then
       -- Multiple candidates require one user choice; do not also open a
       -- speculative best guess before the picker callback runs.
       vim.ui.select(cands, { prompt = "Multiple SDK matches, pick one:" }, function(choice)
-        if choice then vim.cmd("edit " .. vim.fn.fnameescape(choice)) end
+        if choice then open(choice) end
       end)
     else
-      vim.cmd("edit " .. vim.fn.fnameescape(file))
+      open(file)
     end
     return true
   end

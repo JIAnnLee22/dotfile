@@ -7,8 +7,6 @@ local xml = require("android.xml")
 local res = require("android.resources")
 
 local default_opts = {
-  -- sdk_dir = nil (auto),
-  -- compile_sdk = nil (auto),
   keymaps = true,
   override_gd = true,
   -- key for unified jump; set false to not create mapping
@@ -78,10 +76,8 @@ function M.setup(user_opts)
       end
 
       if opts_cache.override_gd and opts_cache.jump_key then
-        -- Override gd locally to use smart jump; keep original via gD
-        -- Create a buffer-local override that tries Android targets first, then LSP
-        vim.keymap.set("n", opts_cache.jump_key, function() xml.jump() end, { buffer = bufnr, desc = "Android smart goto (SDK/XML/resources → LSP)" })
-        vim.keymap.set("n", "gD", function() dependency.definition() end, { buffer = bufnr, desc = "LSP definition (original gd)" })
+        vim.keymap.set("n", opts_cache.jump_key, function() xml.jump() end, { buffer = bufnr, desc = "Android smart goto (resources / LSP / SDK)" })
+        vim.keymap.set("n", "gD", function() dependency.definition() end, { buffer = bufnr, desc = "LSP definition (SDK and dependency sources)" })
         -- optionally expose <leader>gd as original
         vim.keymap.set("n", "<leader>gd", function() dependency.definition() end, { buffer = bufnr, desc = "LSP definition" })
       end
@@ -109,6 +105,7 @@ function M.setup(user_opts)
         if res.try_jump_resource() then return end
         if xml.try_xml_jump() then return end
         if xml.try_code_jump() then return end
+        if vim.bo[ev.buf].filetype ~= 'xml' and sdk.goto_sdk(nil, { quiet = true, strict = true }) then return end
         -- Preserve Vim's normal gf semantics for regular file paths.
         vim.cmd("normal! gf")
       end, { buffer = ev.buf, desc = "Android gf (resource/SDK → default)" })

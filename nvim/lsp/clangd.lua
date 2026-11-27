@@ -3,11 +3,8 @@
 --- https://clangd.llvm.org/installation.html
 ---
 --- - **NOTE:** Clang >= 11 is recommended! See [#23](https://github.com/neovim/nvim-lspconfig/issues/23).
---- - If `compile_commands.json` lives in a build directory, you should
----   symlink it to the root of your source tree.
----   ```
----   ln -s /path/to/myproject/build/compile_commands.json /path/to/myproject/
----   ```
+--- - For a nonstandard build directory, set `CompileFlags.CompilationDatabase`
+---   in the project's `.clangd`, or symlink `compile_commands.json` at its root.
 --- - clangd relies on a [JSON compilation database](https://clang.llvm.org/docs/JSONCompilationDatabase.html)
 ---   specified as compile_commands.json, see https://clangd.llvm.org/installation#compile_commandsjson
 
@@ -61,19 +58,15 @@ end
 ---@class ClangdInitializeResult: lsp.InitializeResult
 ---@field offsetEncoding? string
 
+local compilation_markers = { '.clangd', 'compile_commands.json', 'compile_flags.txt' }
+local project_markers = { '.git', 'CMakeLists.txt', 'meson.build', 'configure.ac', 'Makefile' }
+
 ---@type vim.lsp.Config
 return {
-  cmd = { 'clangd' },
+  cmd = { 'clangd', '--background-index' },
   filetypes = { 'c', 'c.doxygen', 'cpp', 'cpp.doxygen', 'objc', 'objcpp', 'cuda' },
-  root_markers = {
-    '.clangd',
-    '.clang-tidy',
-    '.clang-format',
-    'compile_commands.json',
-    'compile_flags.txt',
-    'configure.ac', -- AutoTools
-    '.git',
-  },
+  root_markers = vim.fn.has('nvim-0.12') == 1 and { compilation_markers, project_markers }
+    or vim.list_extend(compilation_markers, project_markers),
   get_language_id = function(_, ftype)
     local t = { objc = 'objective-c', objcpp = 'objective-cpp', cuda = 'cuda-cpp' }
     return t[ftype] or ftype

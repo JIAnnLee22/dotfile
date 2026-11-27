@@ -28,7 +28,7 @@ end
 local function find_java_executable()
   -- NixOS exposes the selected JDK through JAVA_HOME and PATH. Do not guess
   -- mutable /usr/lib JVM paths, which are not present on NixOS.
-  local homes = { vim.g.java_home, os.getenv('JAVA_HOME') }
+  local homes = { vim.g.java_home or '', vim.env.JAVA_HOME or '' }
   for _, home in ipairs(homes) do
     if home and home ~= '' then
       local candidate = home:gsub('/+$', '') .. '/bin/java'
@@ -67,7 +67,7 @@ return {
     if config.root_dir then
       -- The basename alone collides for projects with the same parent name;
       -- include a stable hash so each Gradle workspace gets its own metadata.
-      local project_name = vim.fn.fnamemodify(config.root_dir, ':p:t')
+      local project_name = vim.fs.basename(config.root_dir)
       local project_id = vim.fn.sha256(config.root_dir):sub(1, 12)
       data_dir = data_dir .. '/' .. project_name .. '-' .. project_id
     end
@@ -90,6 +90,11 @@ return {
   workspace_required = true,
   root_markers = vim.fn.has('nvim-0.12') == 1 and { root_markers1, root_markers2 }
     or vim.list_extend(root_markers1, root_markers2),
+  before_init = function(params)
+    -- Advertise static definition support so it is usable even while jdtls
+    -- imports the Gradle project and has not registered capabilities yet.
+    params.capabilities.textDocument.definition.dynamicRegistration = false
+  end,
   settings = {
     java = {
       eclipse = { downloadSources = true },

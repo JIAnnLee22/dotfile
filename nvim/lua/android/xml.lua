@@ -198,9 +198,7 @@ function M.try_code_jump()
   if res.try_jump_resource() then return true end
 
   local line = vim.api.nvim_get_current_line()
-  local col = vim.api.nvim_win_get_cursor(0)[2] + 1
   local cword = vim.fn.expand("<cword>")
-  local cWORD = vim.fn.expand("<cWORD>")
 
   -- handle viewBinding: binding.fooBar -> find view id fooBar in layouts?
   -- pattern: binding.<id>
@@ -219,26 +217,6 @@ function M.try_code_jump()
       local f = vim.split(vim.trim(hits), "\n")[1]
       vim.cmd("edit " .. vim.fn.fnameescape(f))
       return true
-    end
-  end
-
-  -- handle findViewById(R.id.xxx) already via R, but also handle string literal referencing layout?
-  -- handle Intent / navigation: e.g. R.layout.xxx already covered
-
-  -- handle SDK class jump if nothing else_matched
-  -- only attempt if cword looks like a class (Uppercase first)
-  if cword:match("^[A-Z][%w_]*$") then
-    -- peek import line? try sdk jump but don't fallback to notify loudly; soft attempt
-    local file, err = sdk.find_sdk_source(cword)
-    if file then
-      vim.cmd("edit " .. vim.fn.fnameescape(file))
-      return true
-    end
-  elseif cword:match("^[%w_]+$") and #cword > 2 then
-    -- if line contains import and cursor on class, try fqn detection via <cWORD>
-    local fqn = cWORD:gsub("[^%w%.%_]+", "")
-    if fqn:match("%.") and fqn:match("^[%w%.]+$") then
-      if sdk.goto_sdk(fqn, { quiet = true }) then return true end
     end
   end
 
@@ -270,29 +248,19 @@ function M.jump()
     return
   end
 
-  -- kotlin/java
-  if ft == "kotlin" or ft == "java" or ft == "kt" then
+  if is_kotlin_java() then
     if M.try_code_jump() then return end
-    -- final fallback: try SDK source under cursor
-    local w = sdk.word_under_cursor()
-    if w and w ~= "" then
-      if sdk.goto_sdk(w, { quiet = true }) then return end
+    local function jump_sdk()
+      return sdk.goto_sdk(nil, { quiet = true, strict = true })
     end
-    -- fallback to LSP definition without an extra warning on every ordinary
-    -- project symbol or method.
-    if #vim.lsp.get_clients({ bufnr = 0 }) > 0 then
-      dependency.definition()
-    else
-      vim.notify("no Android target and no LSP client attached", vim.log.levels.INFO)
-    end
+    -- An explicit import is unambiguous and should work even if the Gradle
+    -- server is actively importing the project and has not answered yet.
+    if vim.api.nvim_get_current_line():match('^%s*import%s') and jump_sdk() then return end
+    dependency.definition(jump_sdk)
     return
   end
 
-  -- other filetypes: try resource then sdk then lsp
-  if M.try_code_jump() then return end
-  local w = sdk.word_under_cursor()
-  if w and sdk.goto_sdk(w, { quiet = true }) then return end
-  if vim.lsp.buf then pcall(dependency.definition) end
+  vim.lsp.buf.definition()
 end
 
 return M

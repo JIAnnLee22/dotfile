@@ -203,43 +203,17 @@ function M.try_jump_resource(opts)
   opts = opts or {}
   local line = vim.api.nvim_get_current_line()
   local col = vim.api.nvim_win_get_cursor(0)[2] + 1
-  -- expand word with extra chars : include / . @ + :
-  local cWORD = vim.fn.expand("<cWORD>")
-  local cword = vim.fn.expand("<cword>")
-
-  -- 1) try @type/name at cursor
-  -- look around cursor for @ pattern in the line
-  local at_pat = "@%+?[%w_]+/[%w_%.%-]+"
-  for s, e in line:gmatch("()" .. at_pat .. "()") do
-    -- check if col within s..e
-    if col >= s and col <= e then
-      local seg = line:sub(s, e)
-      local rt, rn = M.parse_at_reference(seg)
-      if rt and rn then return M.open_resource(rt, rn, opts) end
+  -- Restrict jumps to the token at the cursor: expressions like
+  -- findViewById<View>(R.id.title) share one whitespace-delimited word.
+  for first, ref, last in line:gmatch('()(@%+?[%w_]+/[%w_.%-]+)()') do
+    if col >= first and col < last then
+      local rtype, rname = M.parse_at_reference(ref)
+      if rtype and rname then return M.open_resource(rtype, rname, opts) end
     end
   end
-  -- also try cWORD directly (if line detection missed due to quotes)
-  local rt, rn = M.parse_at_reference(cWORD)
-  if rt and rn then return M.open_resource(rt, rn, opts) end
-
-  -- 2) try R.type.name
-  -- search line for R. patterns near cursor
-  for rtype, rname in line:gmatch("R%.([%w_]+)%.([%w_]+)") do
-    -- find position of this occurrence
-    local pat = "R%." .. rtype .. "%." .. rname
-    local s = line:find(pat, 1, true)
-    if s then
-      local e = s + #pat -1
-      if col >= s-2 and col <= e+2 then
-        return M.open_resource(rtype, rname, opts)
-      end
-    end
+  for first, rtype, rname, last in line:gmatch('()%f[%w_]R%.([%w_]+)%.([%w_]+)()') do
+    if col >= first and col < last then return M.open_resource(rtype, rname, opts) end
   end
-  local rtype2, rname2 = M.parse_r_reference(cWORD)
-  if rtype2 and rname2 then return M.open_resource(rtype2, rname2, opts) end
-
-  -- 3) fallback: if cword looks like resource name and previous token hints type
-  -- e.g., stringResource(R.string.xxx) -> we already handled, but handle binding.id case?
   return false
 end
 

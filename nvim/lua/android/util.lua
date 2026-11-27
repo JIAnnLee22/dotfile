@@ -1,39 +1,20 @@
 local M = {}
 
--- cache per cwd
-local sdk_dir_cache = {}
-local compile_sdk_cache = {}
+local build_files = { 'build.gradle.kts', 'build.gradle' }
 
---- @return string|nil
+local function start_dir(path)
+  path = path or vim.api.nvim_buf_get_name(0)
+  if path == '' then return vim.uv.cwd() end
+  path = vim.fs.normalize(vim.fn.fnamemodify(path, ':p'))
+  return vim.fn.isdirectory(path) == 1 and path or vim.fs.dirname(path)
+end
+
 function M.find_project_root(startpath)
-  startpath = startpath or vim.fn.expand("%:p:h")
-  if startpath == "" then startpath = vim.fn.getcwd() end
-  -- Callers may pass either a buffer directory or an absolute file path.
-  if vim.fn.filereadable(startpath) == 1 then
-    startpath = vim.fs.dirname(startpath)
-  end
-  -- priority 1: multi-module / repo root markers
-  local root_markers = { "settings.gradle.kts", "settings.gradle", "gradlew", ".git" }
-  local found = vim.fs.find(root_markers, { upward = true, path = startpath })
-  if #found > 0 then return vim.fs.dirname(found[1]) end
-  -- fallback: single-module markers (app/build.gradle etc.)
-  local fallback = { "build.gradle.kts", "build.gradle", "pom.xml", "build.xml" }
-  found = vim.fs.find(fallback, { upward = true, path = startpath })
-  if #found > 0 then
-    -- for build.gradle.kts inside app/ we want its parent's parent (project root) if sibling settings exists
-    local d = vim.fs.dirname(found[1])
-    -- if d ends with /app, go one up if parent has settings.gradle
-    local parent = vim.fs.dirname(d)
-    if d:match("/app$") and (
-      vim.fn.filereadable(parent .. "/settings.gradle.kts") == 1 or
-      vim.fn.filereadable(parent .. "/settings.gradle") == 1 or
-      vim.fn.filereadable(parent .. "/gradlew") == 1
-    ) then
-      return parent
-    end
-    return d
-  end
-  return vim.fn.getcwd()
+  local dir = start_dir(startpath)
+  return vim.fs.root(dir, { 'settings.gradle.kts', 'settings.gradle', 'gradlew' })
+    or vim.fs.root(dir, { 'build.gradle.kts', 'build.gradle', 'pom.xml', 'build.xml' })
+    or vim.fs.root(dir, '.git')
+    or vim.fn.getcwd()
 end
 
 function M.trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
@@ -76,18 +57,15 @@ function M.get_sdk_dir(opts)
   -- Per-project configuration is authoritative for Android builds. This avoids
   -- an unrelated ANDROID_HOME shadowing the SDK selected by Gradle.
   local root = opts.root or M.find_project_root(opts.startpath)
-  if sdk_dir_cache[root] then return sdk_dir_cache[root] end
-
   local from_props = M.parse_local_properties(root)
   if from_props and vim.fn.isdirectory(from_props) == 1 then
-    from_props = normalize_sdk_dir(from_props)
-    sdk_dir_cache[root] = from_props
-    return from_props
+    return normalize_sdk_dir(from_props)
   end
 
-  -- Environment fallback for projects without local.properties.
-  local env = os.getenv("ANDROID_HOME") or os.getenv("ANDROID_SDK_ROOT") or os.getenv("ANDROID_SDK_HOME")
-  if env and vim.fn.isdirectory(env) == 1 then return normalize_sdk_dir(env) end
+  for _, name in ipairs({ 'ANDROID_HOME', 'ANDROID_SDK_ROOT' }) do
+    local env = vim.env[name]
+    if env and vim.fn.isdirectory(env) == 1 then return normalize_sdk_dir(env) end
+  end
 
   -- fallback candidates
   local candidates = {
@@ -99,62 +77,47 @@ function M.get_sdk_dir(opts)
   }
   for _, c in ipairs(candidates) do
     if vim.fn.isdirectory(c) == 1 then
-      c = normalize_sdk_dir(c)
-      sdk_dir_cache[root] = c
-      return c
+      return normalize_sdk_dir(c)
     end
   end
   return nil
 end
 
---- try to parse compileSdk from app/build.gradle.kts or build.gradle.kts
-function M.get_compile_sdk(root)
-  root = root or M.find_project_root()
-  if compile_sdk_cache[root] then return compile_sdk_cache[root] end
+local function read(path)
+  local f = io.open(path, 'r')
+  if not f then return nil end
+  local content = f:read('*a')
+  f:close()
+  return content
+end
 
-  local candidates = {
-    root .. "/app/build.gradle.kts",
-    root .. "/app/build.gradle",
-    root .. "/build.gradle.kts",
-    root .. "/build.gradle",
-  }
-  for _, fp in ipairs(candidates) do
-    local f = io.open(fp, "r")
-    if f then
-      local content = f:read("*a")
-      f:close()
-      -- match patterns like:
-      -- compileSdk = 36 / compileSdkVersion 36 / compileSdk { version = release(36) } / version = 36
-      -- we look for compileSdk.*36 or targetSdk etc. Prefer compileSdk.
-      local ver = content:match("compileSdk[^0-9]*release%((%d+)%)")
-        or content:match("compileSdk[^0-9]*%{[^}]*version%s*=%s*release%((%d+)%)")
-        or content:match("compileSdkVersion%s+([%d]+)")
-        or content:match("compileSdk%s*=%s*([%d]+)")
-        or content:match("compileSdk%s*%{[^}]*version%s*=%s*([%d]+)")
-        or content:match("compileSdk%s*%(%s*(%d+)")
-      if ver then
-        local minor = content:match("minorApiLevel%s*=%s*([%d]+)")
-        if minor then
-          local combined = ver .. "." .. minor
-          compile_sdk_cache[root] = combined
-          return combined
-        end
-        compile_sdk_cache[root] = ver
-        return ver
+function M.get_compile_sdk(root, startpath)
+  root = root or M.find_project_root(startpath)
+  if vim.g.android_compile_sdk then return tostring(vim.g.android_compile_sdk) end
+
+  -- Prefer the current module over app/ and the top-level build script.
+  local module = vim.fs.root(start_dir(startpath), build_files)
+  if module and module ~= root and not vim.startswith(module, root .. '/') then module = nil end
+  for _, dir in ipairs({ module or root .. '/app', root, root .. '/app' }) do
+    for _, name in ipairs(build_files) do
+      local content = read(dir .. '/' .. name) or ''
+      local block = content:match('%f[%w]compileSdk%s*(%b{})') or ''
+      local version = block:match('version%s*=%s*release%s*%(%s*(%d+)')
+        or block:match('version%s*=%s*(%d+)')
+      if version then
+        local minor = block:match('minorApiLevel%s*=%s*(%d+)')
+        return minor and version .. '.' .. minor or version
       end
+      version = content:match('%f[%w]compileSdk%s*=%s*(%d+)')
+        or content:match('%f[%w]compileSdk%s*%(%s*(%d+)')
+        or content:match('%f[%w]compileSdk%s+(%d+)')
+        or content:match('%f[%w]compileSdkVersion[%s(]+(%d+)')
+      if version then return version end
     end
   end
 
-  -- check gradle/libs.versions.toml for compileSdk?
-  local toml = root .. "/gradle/libs.versions.toml"
-  local f = io.open(toml, "r")
-  if f then
-    local c = f:read("*a"); f:close()
-    local v = c:match("compileSdk%s*=%s*\"?(%d+)")
-    if v then compile_sdk_cache[root] = v; return v end
-  end
-
-  return nil
+  local catalog = read(root .. '/gradle/libs.versions.toml') or ''
+  return catalog:match('compileSdk%s*=%s*"?(%d+)')
 end
 
 --- @return string|nil sources root
@@ -188,32 +151,23 @@ function M.get_sources_root(sdk_dir, compile_sdk)
   end
 
   if compile_sdk then
-    local exact = base .. "/android-" .. compile_sdk
+    local exact = base .. '/android-' .. compile_sdk
     if is_valid_sources(exact) then return exact end
-    -- try major only and variants: find all with that major prefix, pick highest valid
-    local major = compile_sdk:match("^(%d+)")
-    if major then
-      local candidates = vim.fn.glob(base .. "/android-" .. major .. "*", false, true)
-      if #candidates > 0 then
-        sort_desc(candidates)
-        for _, c in ipairs(candidates) do
-          if is_valid_sources(c) then return c end
-        end
-      end
-      local major_path = base .. "/android-" .. major
-      if is_valid_sources(major_path) then return major_path end
+    local major = compile_sdk:match('^(%d+)')
+    if not major then return nil end
+    for _, path in ipairs({ base .. '/android-' .. major, base .. '/android-' .. major .. '.0' }) do
+      if is_valid_sources(path) then return path end
     end
+    -- Some SDK installations only publish a minor variant for a major API.
+    for _, path in ipairs(sort_desc(vim.fn.glob(base .. '/android-' .. major .. '.*', false, true))) do
+      if is_valid_sources(path) then return path end
+    end
+    return nil
   end
 
-  -- fallback: pick highest installed version that is valid
-  local all = vim.fn.glob(base .. "/android-*", false, true)
-  if #all == 0 then return nil end
-  sort_desc(all)
-  for _, p in ipairs(all) do
-    if is_valid_sources(p) then return p end
+  for _, path in ipairs(sort_desc(vim.fn.glob(base .. '/android-*', false, true))) do
+    if is_valid_sources(path) then return path end
   end
-  -- last resort: return highest even if empty
-  return all[1]
 end
 
 --- helper: list all res directories for the project (handles flavors)
